@@ -1,0 +1,20 @@
+dependencies:
+  idf:
+    source:
+      type: idf
+    version: 5.5.5
+  rinku404/bno085:
+    component_hash: d097ba0454f8cfb8fc77be6c6664b3f5c225ad94adf2f5b6c8ef7f45a2e970cf
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.5'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.0
+direct_dependencies:
+- rinku404/bno085
+manifest_hash: 61edf4669d510902738030a33f9670b88cd9a9f35b2d9ae6f5885f3f411abdfe
+target: esp32s3
+version: 2.0.0
