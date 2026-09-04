@@ -1,3 +1,2 @@
-idf_component_register(SRCS "main.c" "sensor.c" "output.c"
-                       INCLUDE_DIRS "."
-                       PRIV_REQUIRES bno085 driver)
+idf_component_register(SRCS "main.c"
+                       REQUIRES i2c_config vibration_sensor signal_processing driver)
