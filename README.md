@@ -1,35 +1,152 @@
 # PulsoPNAAT — Sistema Embarcado de Manutenção Preditiva por Análise de Vibração
 
+**TCC — Trabalho de Conclusão da Capacitação PNAAT 2026** (FIT - Instituto de Tecnologia | MCTI Futuro | Softex)
+
+**Equipe:**
+- Jetro Kepler Gomes Alencar Gonzaga Viana
+- Jhonatan Gonçalves Pereira
+- José Adiel Calixto Serafim
+- Lucas Vinicius Santos Leonel
+
+---
+
 ## 1. O que é este projeto?
-[Cole aqui o parágrafo da seção 2.1/2.2 do seu documento de requisitos]
+
+Sistema embarcado de manutenção preditiva por análise de vibração (ESP32-S3 + BNO085) — TCC PNAAT 2026, cenário 8: falha de maquinário rotativo em manufatura pesada.
+
+Cenário 8 do PNAAT 2026: falha repentina de maquinário rotativo (motores elétricos e rolamentos) por ausência de acompanhamento preditivo, em ambiente de manufatura pesada.
 
 ## 2. O que compõe a solução?
-- Placa: ESP32-S3 (Heltec WiFi LoRa 32 V3)
-- Sensor: acelerômetro BNO085 (GY-BNO085), via SPI
-- Firmware: C++ sobre Arduino Framework, bibliotecas Adafruit BNO08x e arduinoFFT
-- (fase da PoC: sem Wi-Fi/MQTT — ver seção "Estado atual" abaixo)
+
+**Hardware:**
+- Placa de processamento: ESP32-S3 (Heltec WiFi LoRa 32 V3)
+- Sensor: acelerômetro triaxial BNO085 (módulo GY-BNO085), conectado via SPI
+- Sinalização local: LED e buzzer *(a partir da entrega 04 — atualizar conforme progresso)*
+
+**Software:**
+- Firmware em C++ sobre Arduino Framework (FreeRTOS)
+- Bibliotecas: `Adafruit BNO08x`, `Adafruit BusIO`, `arduinoFFT`
+- Métricas calculadas por janela: RMS, FFT (1x/2x/3x-5x), Kurtosis, THD
+- Conectividade: MQTT sobre Wi-Fi *(a partir da entrega 04/05 — atualizar conforme progresso)*
 
 ## 3. Pré-requisitos
-- PlatformIO (VS Code extension ou CLI)
-- Driver USB-Serial da placa Heltec (CP210x)
 
-## 4. Como rodar
-\`\`\`bash
-git clone <url-do-repo>
+- [PlatformIO](https://platformio.org/) (extensão VS Code ou CLI)
+- [Driver USB-Serial CP210x](https://www.silabs.com/software-and-tools/usb-to-uart-bridge-vcp-drivers?tab=downloads) (para reconhecer a placa Heltec via USB)
+- Git
+
+## 4. Dependências e instalação
+
+As dependências de biblioteca já estão declaradas no `platformio.ini` e são baixadas automaticamente pelo PlatformIO no primeiro build — não é necessário instalar nada manualmente além do PlatformIO em si.
+
+```bash
+git clone https://github.com/jhonatan-goncalves-pereira/pulsopnaat.git
 cd pulsopnaat
-pio run -t upload
-pio device monitor -b 115200
-\`\`\`
+pio run
+```
 
-## Estado atual (Entrega 2 — PoC)
-Esta entrega valida exclusivamente a variável técnica mais arriscada do projeto:
-a lógica RMS+FFT+Kurtosis+THD roda dentro da janela de amostragem sem travar
-e diferencia sinal saudável de sinal com desbalanceamento induzido, usando
-dados reais de um motor/cooler de teste. Wi-Fi, MQTT, LED/buzzer e dashboard
-ficam fora do escopo desta fase (ver seção 2.3 do Documento de Requisitos).
+Se o comando `pio run` compilar sem erros, as dependências foram resolvidas corretamente.
 
-Resultados da validação: ver `data/coleta-poc-entrega02.csv`.
+## 5. Configuração
+
+*(preencher conforme a entrega evoluir — por enquanto a PoC não depende de credenciais)*
+
+Quando a camada Wi-Fi/MQTT for integrada, as credenciais **não** serão gravadas no código-fonte. Um arquivo `.env.example` indicará quais variáveis configurar, e o `.env` real (com os dados reais) não será versionado — ver `.gitignore`.
+
+## 6. Instruções de montagem (conexões elétricas)
+
+Ligação SPI entre o ESP32-S3 (Heltec WiFi LoRa 32 V3) e o módulo GY-BNO085:
+
+| BNO085 | ESP32-S3 (Heltec V3) |
+|---|---|
+| VIN | 3V3 |
+| GND | GND |
+| SCL/SCK | GPIO 4 |
+| SDA/MOSI | GPIO 5 |
+| DI (MISO) | GPIO 3 |
+| CS | GPIO 2 |
+| INT | GPIO 6 |
+| RST | GPIO 7 |
+
+O sensor deve ser fixado **rigidamente** à carcaça do equipamento monitorado (acoplamento rígido é pré-condição para leitura de vibração confiável — ver RNF03 do Documento de Requisitos).
+
+📎 Esquemático elétrico completo: [`docs/diagrama-pinagem.png`](docs/diagrama-pinagem.png)
+📎 Diagrama de arquitetura (fluxo de dados): [`docs/diagrama-blocos.png`](docs/diagrama-blocos.png)
+
+## 7. Como executar
+
+```bash
+pio run -t upload        # grava o firmware na placa
+pio device monitor -b 115200   # abre o monitor serial
+```
+
+## 8. Resultado esperado (confirmação de execução)
+
+Ao abrir o monitor serial, você deve ver:
+
+1. A mensagem `BNO085 conectado via SPI!`
+2. Durante os primeiros ~30s, o log `Calibrando (N/40)...` (calibração automática do baseline)
+3. Após a calibração, uma linha por janela processada no formato:
+```
+   Proc: 1840 us | RMS:120.4 FFT1x:88.2 Kurt:0.15 THD:0.22 -> VERDE
+```
+4. Ao induzir desbalanceamento no motor de teste (peso fixado em uma pá), o estado deve migrar para `AMARELO` ou `VERMELHO` em poucos segundos.
+
+Se esses 4 pontos ocorrerem, a execução foi bem-sucedida.
+
+## Estado atual do projeto
+
+| Entrega | Status | Tag |
+|---|---|---|
+| Entrega 1 — Documento de Requisitos | ✅ Concluída | `entrega-01` |
+| Entrega 2 — PoC (lógica de detecção) | 🚧 Em andamento | `entrega-02` |
+| Entrega 3 — Estruturação de repositório | ⏳ Pendente | — |
+| Entrega 4 — Integração final | ⏳ Pendente | — |
+
+**Escopo atual (PoC):** valida exclusivamente se a lógica RMS+FFT+Kurtosis+THD roda dentro da janela de amostragem sem travar o processador e diferencia sinal saudável de sinal com desbalanceamento induzido, usando dados reais de motor/cooler de teste. Wi-Fi, MQTT, LED/buzzer e dashboard estão **fora do escopo** desta fase (ver seção 2.3 — Limitations and Exclusions do Documento de Requisitos).
+
+Resultados da validação: [`data/coleta-poc-entrega02.csv`](data/coleta-poc-entrega02.csv)
 
 ## Próxima etapa
-Integração das camadas de conectividade (Wi-Fi/MQTT) e sinalização local
-(LED/buzzer), seguindo estratégia de Integração Bottom-Up.
+
+Integração das camadas de conectividade (Wi-Fi/MQTT) e sinalização local (LED/buzzer), seguindo estratégia de Integração Bottom-Up, sem alterar a lógica de detecção já validada nesta PoC.
+
+---
+
+## Padrão de commits
+
+Adotamos uma convenção simplificada inspirada em [Conventional Commits](https://www.conventionalcommits.org/), com um conjunto reduzido de tipos suficiente para o escopo deste projeto:
+
+| Tipo | Emoji | Quando usar |
+|---|---|---|
+| `feat` | ✨ | Nova funcionalidade (ex: cálculo de FFT, publicação MQTT) |
+| `fix` | 🐛 | Correção de bug ou comportamento incorreto |
+| `docs` | 📚 | Mudança apenas em documentação (README, diagramas, comentários) |
+| `test` | 🧪 | Criação ou ajuste de testes/coleta de dados de validação |
+| `refactor` | ♻️ | Reorganização de código sem mudar comportamento |
+| `perf` | ⚡ | Melhoria de desempenho (latência, uso de memória) |
+| `chore` | 🔧 | Configuração de build, dependências, `.gitignore` etc. |
+
+**Formato:** `<emoji> <tipo>: <descrição curta no imperativo>`
+
+Exemplos:
+```bash
+git commit -m "✨ feat: adiciona cálculo de kurtosis por janela"
+git commit -m "🐛 fix: corrige overflow no buffer de amostragem SPI"
+git commit -m "📚 docs: atualiza README com instruções de montagem"
+git commit -m "🧪 test: registra coleta de dados da PoC (10 janelas saudáveis)"
+```
+
+Regra prática: mensagem curta e direta na primeira linha; se precisar explicar o *porquê* da mudança, use o corpo do commit (linha em branco + parágrafo).
+
+## Padrão de branches
+
+| Branch | Uso |
+|---|---|
+| `main` | Sempre estável e executável. Cada entrega recebe uma tag (`entrega-01`, `entrega-02`...) |
+| `feature/<escopo>` | Nova funcionalidade (ex: `feature/fft-metrics`, `feature/mqtt-publish`) |
+| `fix/<escopo>` | Correção de bug (ex: `fix/spi-timeout`) |
+| `poc/<escopo>` | Experimentos que podem não virar código definitivo (ex: `poc/baseline-calibracao`) |
+| `docs/<escopo>` | Alterações apenas de documentação |
+
+Ninguém commita direto na `main`. Toda mudança nasce em uma branch com o prefixo adequado e é mesclada via merge/PR.
