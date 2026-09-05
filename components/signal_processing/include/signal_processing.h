@@ -103,6 +103,23 @@ typedef struct {
 } metricas_t;
 
 /*
+ * Identificador das métricas de `metricas_t` — visão tabular
+ * [métrica][eixo] usada pelo baseline (média/σ por métrica e por eixo) e
+ * pela classificação 3σ/6σ do alert_manager. A ordem DEVE espelhar os
+ * campos da struct (garantido por _Static_assert na implementação de
+ * `metricas_para_vetor`).
+ */
+typedef enum {
+    METRICA_RMS = 0,
+    METRICA_HARMONICA_1X,
+    METRICA_HARMONICA_2X,
+    METRICA_BANDA_3X_5X,
+    METRICA_KURTOSIS,
+    METRICA_THD,
+    METRICA_NUM
+} metrica_id_t;
+
+/*
  * Inicialização do componente — chamar UMA VEZ no boot (app_main ou runner
  * de testes) antes de qualquer `analisar_janela`. Idempotente: constrói as
  * tabelas de twiddle do esp-dsp (dsps_fft2r_init_fc32, padrão dos exemplos
@@ -131,6 +148,14 @@ void signal_processing_init(void);
  * `metricas_out` NULL → no-op. `n_amostras` > JANELA_N_AMOSTRAS → limitado.
  */
 void analisar_janela(const janela_t *janela, float f0_hz, metricas_t *metricas_out);
+
+/*
+ * Copia as métricas para a visão tabular `saida[métrica][eixo]`, na ordem
+ * de `metrica_id_t` — formato consumido por baseline e alert_manager.
+ * `metricas_out` NULL → `saida` recebe zeros. `saida` NULL → no-op.
+ */
+void metricas_para_vetor(const metricas_t *metricas_out,
+                         float saida[METRICA_NUM][JANELA_NUM_EIXOS]);
 
 /*
  * RMS = √(média(x²)) sobre n amostras contíguas, em m/s².

@@ -1,2 +1,4 @@
 idf_component_register(SRCS "main.c"
-                       REQUIRES i2c_config vibration_sensor signal_processing driver esp_timer)
+                       REQUIRES i2c_config vibration_sensor signal_processing
+                                baseline alert_manager driver esp_timer
+                                nvs_flash)

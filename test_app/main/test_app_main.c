@@ -14,6 +14,8 @@
 #include "signal_processing.h"
 
 extern void rodar_testes_signal_processing(void);
+extern void rodar_testes_baseline(void);
+extern void rodar_testes_alert_manager(void);
 
 void app_main(void)
 {
@@ -23,6 +25,8 @@ void app_main(void)
 
     UNITY_BEGIN(); /* void em Unity 2.6.0 — só UNITY_END() retorna falhas. */
     rodar_testes_signal_processing();
+    rodar_testes_baseline();
+    rodar_testes_alert_manager();
     UNITY_END();
     /* Resumo já impresso no serial; retorno normal (sistema permanece vivo
      * em idle para leitura tranquila do monitor). */

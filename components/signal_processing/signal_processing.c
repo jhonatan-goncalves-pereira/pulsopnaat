@@ -31,6 +31,14 @@
 #include <stdbool.h>
 #include <string.h>
 
+/* A visão tabular [métrica][eixo] de metricas_t pressupõe que a struct é
+ * exatamente METRICA_NUM arrays de JANELA_NUM_EIXOS floats (header documenta
+ * a correspondência com metrica_id_t). Se alguém acrescentar uma métrica sem
+ * atualizar o enum (ou vice-versa), o build quebra aqui — não na bancada. */
+_Static_assert(sizeof(metricas_t) ==
+                   (size_t)METRICA_NUM * JANELA_NUM_EIXOS * sizeof(float),
+               "metricas_t deve ter METRICA_NUM x JANELA_NUM_EIXOS floats");
+
 /* Buffers de rascunho — alinhados a 16 bytes como os exemplos oficiais do
  * esp-dsp (caminho SIMD aes3/ae32 da FFT). Não reentrante por design: uma
  * única task de processamento consome as janelas (SPEC §Arquitetura). */
@@ -44,6 +52,24 @@ void signal_processing_init(void)
      * Idempotente (dsps_fft2r_initialized). Se falhar (heap), aborta no
      * boot — coerente com o estilo ESP_ERROR_CHECK do app_main. */
     ESP_ERROR_CHECK(dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE));
+}
+
+void metricas_para_vetor(const metricas_t *metricas_out,
+                         float saida[METRICA_NUM][JANELA_NUM_EIXOS])
+{
+    if (saida == NULL) {
+        return;
+    }
+    if (metricas_out == NULL) {
+        memset(saida, 0, (size_t)METRICA_NUM * JANELA_NUM_EIXOS * sizeof(float));
+        return;
+    }
+    memcpy(saida[0], metricas_out->rms, sizeof(float) * JANELA_NUM_EIXOS);
+    memcpy(saida[1], metricas_out->harmonica_1x, sizeof(float) * JANELA_NUM_EIXOS);
+    memcpy(saida[2], metricas_out->harmonica_2x, sizeof(float) * JANELA_NUM_EIXOS);
+    memcpy(saida[3], metricas_out->banda_3x_5x, sizeof(float) * JANELA_NUM_EIXOS);
+    memcpy(saida[4], metricas_out->kurtosis, sizeof(float) * JANELA_NUM_EIXOS);
+    memcpy(saida[5], metricas_out->thd, sizeof(float) * JANELA_NUM_EIXOS);
 }
 
 float calcular_rms_passo(const float *amostras, size_t n_amostras, size_t passo)

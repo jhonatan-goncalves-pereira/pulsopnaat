@@ -13,6 +13,8 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # de componente individualmente, para não arrastar dependências de hardware
 # como o driver bno085, resolvidas apenas no projeto principal).
 set(EXTRA_COMPONENT_DIRS
-    "${CMAKE_CURRENT_LIST_DIR}/../components/signal_processing")
+    "${CMAKE_CURRENT_LIST_DIR}/../components/signal_processing"
+    "${CMAKE_CURRENT_LIST_DIR}/../components/baseline"
+    "${CMAKE_CURRENT_LIST_DIR}/../components/alert_manager")
 
 project(test_app)

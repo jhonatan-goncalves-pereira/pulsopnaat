@@ -47,6 +47,7 @@
 #include "signal_processing.h"
 
 #include <math.h>
+#include <string.h>
 
 /* M_PI não é padrão em -std=c11 estrito. */
 #define PI 3.14159265358979323846f
@@ -385,6 +386,48 @@ void test_calcular_kurtosis_defensivos(void)
     TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, calcular_kurtosis(c, 3));
 }
 
+/* ==================== Visão tabular (ticket 03) ==================== */
+
+/* 17. metricas_para_vetor: campos de metricas_t mapeiam na ordem de
+ *     metrica_id_t (rms, 1x, 2x, banda, kurt, thd) × eixos (X, Y, Z). */
+void test_metricas_para_vetor_mapeia_campos(void)
+{
+    metricas_t m;
+    float *p = &m.rms[0];
+    for (size_t i = 0; i < sizeof(metricas_t) / sizeof(float); ++i) {
+        p[i] = (float)i; /* valores 0..17 em ordem de memória */
+    }
+    float v[METRICA_NUM][JANELA_NUM_EIXOS];
+    metricas_para_vetor(&m, v);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, v[METRICA_RMS][EIXO_X]);
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, v[METRICA_RMS][EIXO_Y]);
+    TEST_ASSERT_EQUAL_FLOAT(2.0f, v[METRICA_RMS][EIXO_Z]);
+    TEST_ASSERT_EQUAL_FLOAT(3.0f, v[METRICA_HARMONICA_1X][EIXO_X]);
+    TEST_ASSERT_EQUAL_FLOAT(9.0f, v[METRICA_BANDA_3X_5X][EIXO_X]);
+    TEST_ASSERT_EQUAL_FLOAT(12.0f, v[METRICA_KURTOSIS][EIXO_X]);
+    TEST_ASSERT_EQUAL_FLOAT(17.0f, v[METRICA_THD][EIXO_Z]);
+}
+
+/* 18. metricas_para_vetor: defensivos — saída NULL (no-op) e métricas NULL
+ *     (saída zerada). */
+void test_metricas_para_vetor_defensivos(void)
+{
+    metricas_t m;
+    memset(&m, 0, sizeof(m));
+    m.rms[EIXO_X] = 7.0f;
+    float v[METRICA_NUM][JANELA_NUM_EIXOS];
+
+    metricas_para_vetor(&m, NULL); /* não deve crashar */
+
+    memset(v, 0xAA, sizeof(v));
+    metricas_para_vetor(NULL, v);
+    for (int i = 0; i < METRICA_NUM; ++i) {
+        for (int e = 0; e < JANELA_NUM_EIXOS; ++e) {
+            TEST_ASSERT_EQUAL_FLOAT(0.0f, v[i][e]);
+        }
+    }
+}
+
 /* Registro dos testes — chamado pelos runners entre UNITY_BEGIN/UNITY_END. */
 void rodar_testes_signal_processing(void)
 {
@@ -415,4 +458,7 @@ void rodar_testes_signal_processing(void)
     RUN_TEST(test_kurtosis_dc_zero);
     RUN_TEST(test_calcular_kurtosis_direto);
     RUN_TEST(test_calcular_kurtosis_defensivos);
+    /* Visão tabular (ticket 03) */
+    RUN_TEST(test_metricas_para_vetor_mapeia_campos);
+    RUN_TEST(test_metricas_para_vetor_defensivos);
 }
