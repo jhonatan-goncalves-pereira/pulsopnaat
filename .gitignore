@@ -3,6 +3,11 @@ build/
 sdkconfig.old
 sdkconfig.old.*
 
+# --- Testes on-target (test_app) ---
+test_app/build/
+test_app/sdkconfig
+test_app/sdkconfig.old
+
 # --- Managed components (restored via idf_component.yml + dependencies.lock) ---
 managed_components/
 

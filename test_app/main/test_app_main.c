@@ -1,0 +1,23 @@
+/*
+ * Runner dos testes Unity no ALVO (ESP32-S3) — app de teste dedicado.
+ *
+ * Chama o mesmo corpus do host (pasta test de cada componente) entre
+ * UNITY_BEGIN/END. O resumo do Unity (N Tests, 0 Failures, OK) sai no console
+ * serial.
+ *
+ * Uso:
+ *   . $IDF_PATH/export.sh
+ *   idf.py -C test_app build flash monitor
+ */
+#include "unity.h"
+
+extern void rodar_testes_signal_processing(void);
+
+void app_main(void)
+{
+    UNITY_BEGIN(); /* void em Unity 2.6.0 — só UNITY_END() retorna falhas. */
+    rodar_testes_signal_processing();
+    UNITY_END();
+    /* Resumo já impresso no serial; retorno normal (sistema permanece vivo
+     * em idle para leitura tranquila do monitor). */
+}
