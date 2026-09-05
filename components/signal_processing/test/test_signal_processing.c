@@ -7,7 +7,7 @@
  * UNITY_BEGIN()/UNITY_END(). setUp()/tearDown() vivem AQUI (único arquivo;
  * símbolo duplicado senão). O índice dos casos é a lista de RUN_TEST no fim.
  *
- * Frequências: f0 = 31,25 Hz = 32 · (500/512) cai EXATAMENTE no bin 32 da
+ * Frequências: f0 = 25 Hz = 32 · (400/512) cai EXATAMENTE no bin 32 da
  * FFT-512; harmônicos 2x..5x caem nos bins 64/96/128/160. Com Hann, tom em
  * bin alinhado concentra a energia no bin + 2 vizinhos (vazamento nulo nos
  * bins harmônicos distantes).
@@ -22,8 +22,8 @@
 /* M_PI não é padrão em -std=c11 estrito. */
 #define PI 3.14159265358979323846f
 
-/* f0 do teste: 31,25 Hz → bin 32 exato (32·500/512). RPM equivalente: 1875. */
-#define F0_TESTE 31.25f
+/* f0 do teste: 25 Hz → bin 32 exato (32·400/512). RPM equivalente: 1500. */
+#define F0_TESTE 25.0f
 
 /*
  * Buffers de teste FORA da pilha: janela_t tem ~4,8 KB — estouraria a task
@@ -46,7 +46,7 @@ void tearDown(void)
 }
 
 /* Preenche a janela com zeros e, no eixo indicado, com
- * x(t) = dc + A·sen(2π·f·t), fs = 500 Hz, n amostras. */
+ * x(t) = dc + A·sen(2π·f·t), fs = 400 Hz, n amostras. */
 static void preencher_senoide(janela_t *j, eixo_t eixo, float amplitude, float freq_hz,
                               float dc, uint32_t n)
 {
@@ -87,7 +87,7 @@ static void sujar_metricas(metricas_t *m)
 
 /* ============================ RMS (ticket 01) ============================ */
 
-/* 1. Senoide pura 10 Hz, A=2 m/s², 10 períodos inteiros em 500 amostras (1 s). */
+/* 1. Senoide pura 10 Hz, A=2 m/s², 10 períodos inteiros em 400 amostras (1 s). */
 void test_rms_senoide_pura_eixo_x(void)
 {
     preencher_senoide(&j, EIXO_X, 2.0f, 10.0f, 0.0f, JANELA_N_AMOSTRAS);
@@ -103,8 +103,9 @@ void test_senoide_em_um_eixo_nao_vaza_para_outros(void)
     TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, m.rms[EIXO_Z]);
 }
 
-/* 2. DC de gravidade em repouso: RMS = |DC|. */
-void test_rms_dc_gravidade(void)
+/* 2. DC constante: RMS = |DC| — contrato da função inclui o DC da entrada
+ *    (a aquisição 0x04 não entrega mais a gravidade, mas a matemática é a mesma). */
+void test_rms_dc_constante(void)
 {
     preencher_senoide(&j, EIXO_Z, 0.0f, 10.0f, -9.81f, JANELA_N_AMOSTRAS);
     analisar_janela(&j, F0_TESTE, &m);
@@ -155,13 +156,13 @@ void test_analisar_janela_metricas_nulas_e_no_op(void)
     TEST_PASS_MESSAGE("no-op com metricas_out NULL");
 }
 
-/* 5. Janela parcial: 200 amostras de senoide A=1 (4 períodos a 500 Hz) → A/√2. */
+/* 5. Janela parcial: 160 amostras de senoide A=1 (4 períodos a 400 Hz) → A/√2. */
 void test_janela_parcial_usa_n_amostras(void)
 {
-    preencher_senoide(&j, EIXO_X, 1.0f, 10.0f, 0.0f, 200);
+    preencher_senoide(&j, EIXO_X, 1.0f, 10.0f, 0.0f, 160);
     analisar_janela(&j, F0_TESTE, &m);
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 1.0f / sqrtf(2.0f), m.rms[EIXO_X]);
-    /* Kurtosis sobre as 200 amostras (4 ciclos inteiros) continua −1,5. */
+    /* Kurtosis sobre as 160 amostras (4 ciclos inteiros) continua −1,5. */
     TEST_ASSERT_FLOAT_WITHIN(0.05f, -1.5f, m.kurtosis[EIXO_X]);
 }
 
@@ -273,7 +274,7 @@ void test_espectral_f0_invalido(void)
     TEST_ASSERT_FLOAT_WITHIN(0.05f, -1.5f, m.kurtosis[EIXO_X]);
 }
 
-/* 14. DC de gravidade: sem fundamental e THD = 0 pela guarda (V₁ ≤ 10⁻³·RMS);
+/* 14. DC constante: sem fundamental e THD = 0 pela guarda (V₁ ≤ 10⁻³·RMS);
  *     kurtosis = 0 (variância nula). */
 void test_espectral_dc_sem_fundamental(void)
 {
@@ -284,12 +285,13 @@ void test_espectral_dc_sem_fundamental(void)
     TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, m.kurtosis[EIXO_Z]);
 }
 
-/* 15. f0 = 200 Hz (bin 204,8 → 205, scalloping de Hann ≈ −0,35 dB): 1x dentro
- *     de 3%; 2x e banda acima de Nyquist → 0; THD → 0. */
+/* 15. f0 = 160 Hz (80% de Nyquist 200 Hz; bin 204,8 → 205, scalloping de
+ *     Hann ≈ −0,35 dB): 1x dentro de 3%; 2x e banda acima de Nyquist → 0;
+ *     THD → 0. */
 void test_espectral_f0_proximo_de_nyquist(void)
 {
-    preencher_senoide(&j, EIXO_X, 1.0f, 200.0f, 0.0f, JANELA_N_AMOSTRAS);
-    analisar_janela(&j, 200.0f, &m);
+    preencher_senoide(&j, EIXO_X, 1.0f, 160.0f, 0.0f, JANELA_N_AMOSTRAS);
+    analisar_janela(&j, 160.0f, &m);
     TEST_ASSERT_FLOAT_WITHIN(0.03f, 1.0f, m.harmonica_1x[EIXO_X]);
     TEST_ASSERT_FLOAT_WITHIN(1e-9f, 0.0f, m.harmonica_2x[EIXO_X]);
     TEST_ASSERT_FLOAT_WITHIN(1e-9f, 0.0f, m.banda_3x_5x[EIXO_X]);
@@ -307,7 +309,7 @@ void test_kurtosis_senoide_menos_1_5(void)
 }
 
 /* 16b. Sinal impulsivo (10 amostras em 10, resto zero) → kurtosis ≫ 3
- *      (teórico ≈ 45; protótipo: 45,02). */
+ *      (teórico ≈ 35,0 com N=400). */
 void test_kurtosis_impulsiva_elevada(void)
 {
     preencher_senoide(&j, EIXO_X, 0.0f, F0_TESTE, 0.0f, JANELA_N_AMOSTRAS);
@@ -316,8 +318,8 @@ void test_kurtosis_impulsiva_elevada(void)
     }
     analisar_janela(&j, F0_TESTE, &m);
     TEST_ASSERT_GREATER_THAN_FLOAT(20.0f, m.kurtosis[EIXO_X]);
-    /* RMS da rajada confere: √(10·10²/500) = √2. */
-    TEST_ASSERT_FLOAT_WITHIN(1e-4f, sqrtf(2.0f), m.rms[EIXO_X]);
+    /* RMS da rajada confere: √(10·10²/400) = √2,5. */
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, sqrtf(2.5f), m.rms[EIXO_X]);
 }
 
 /* 16c. DC constante → variância 0 → kurtosis definida como 0. */
@@ -456,9 +458,9 @@ static void test_hampel_preserva_senoide_limpa(void)
                              depois.rms[EIXO_X]);
 }
 
-/* Eixo Z em repouso (gravidade ~9,81) com um glitch de +3 m/s²: removido e a
- * gravidade fica intacta. */
-static void test_hampel_preserva_gravidade_com_glitch(void)
+/* Eixo Z com DC constante (~gravidade no reporte antigo 0x01) e um glitch de
+ * +3 m/s²: removido e o DC fica intacto. */
+static void test_hampel_preserva_dc_constante_com_glitch(void)
 {
     preencher_senoide(&j, EIXO_Z, 0.0f, 0.0f, 9.80665f, JANELA_N_AMOSTRAS);
     const uint32_t ig = 250;
@@ -527,7 +529,7 @@ void rodar_testes_signal_processing(void)
     /* RMS (ticket 01) */
     RUN_TEST(test_rms_senoide_pura_eixo_x);
     RUN_TEST(test_senoide_em_um_eixo_nao_vaza_para_outros);
-    RUN_TEST(test_rms_dc_gravidade);
+    RUN_TEST(test_rms_dc_constante);
     RUN_TEST(test_rms_senoide_sobre_dc);
     RUN_TEST(test_janela_zerada_rms_zero);
     RUN_TEST(test_analisar_janela_nula_zera_metricas);
@@ -558,7 +560,7 @@ void rodar_testes_signal_processing(void)
     RUN_TEST(test_amostra_valida_basico);
     RUN_TEST(test_hampel_remove_impulso_isolado);
     RUN_TEST(test_hampel_preserva_senoide_limpa);
-    RUN_TEST(test_hampel_preserva_gravidade_com_glitch);
+    RUN_TEST(test_hampel_preserva_dc_constante_com_glitch);
     RUN_TEST(test_hampel_preserva_vibracao_com_harmonicos);
     RUN_TEST(test_hampel_remove_0x60000000);
     RUN_TEST(test_hampel_defensivos);

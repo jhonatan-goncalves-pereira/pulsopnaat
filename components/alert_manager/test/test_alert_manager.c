@@ -375,6 +375,110 @@ void test_sinalizacao_defensivos(void)
     TEST_ASSERT_TRUE(true); /* chegou aqui sem falhar */
 }
 
+/* --------------- Confirmação de estado (persistência, v2.3) --------------- */
+
+/* 17. k = 1 → adoção imediata (comportamento janela-a-janela pré-v2.3). */
+void test_confirmacao_k1_adota_imediato(void)
+{
+    confirmacao_estado_t acc = {ESTADO_EQUIP_VERDE, 0};
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_AMARELO,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_AMARELO, 1, &acc));
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERMELHO,
+                      alerta_confirmar_estado(ESTADO_EQUIP_AMARELO,
+                                              ESTADO_EQUIP_VERMELHO, 1, &acc));
+    TEST_ASSERT_EQUAL(0, acc.n_consecutivas); /* sem pendências neste modo */
+}
+
+/* 18. k = 3 → blip isolado e blip duplo nunca adotam (motivação v2.3: picos
+ *     de kurtosis sobre quantização duram 1–2 janelas). */
+void test_confirmacao_blip_isolado_nao_adota(void)
+{
+    confirmacao_estado_t acc = {ESTADO_EQUIP_VERDE, 0};
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERDE,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_AMARELO, 3, &acc));
+    /* Janela de volta ao normal zera o pendente. */
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERDE,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_VERDE, 3, &acc));
+    TEST_ASSERT_EQUAL(0, acc.n_consecutivas);
+    /* Blip duplo: ainda abaixo de k. */
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_AMARELO, 3, &acc);
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERDE,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_AMARELO, 3, &acc));
+    TEST_ASSERT_EQUAL(2, acc.n_consecutivas); /* pendente, não adotado */
+}
+
+/* 19. k = 3 → três janelas consecutivas confirmam; pendente zera após
+ *     adoção e janelas em linha mantêm o estado. */
+void test_confirmacao_tres_consecutivas_adotam(void)
+{
+    confirmacao_estado_t acc = {ESTADO_EQUIP_VERDE, 0};
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_VERMELHO, 3, &acc);
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_VERMELHO, 3, &acc);
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERMELHO,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_VERMELHO, 3, &acc));
+    TEST_ASSERT_EQUAL(0, acc.n_consecutivas);
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERMELHO,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERMELHO,
+                                              ESTADO_EQUIP_VERMELHO, 3, &acc));
+}
+
+/* 20. Troca de candidato reinicia a contagem; janela em linha com o estado
+ *     vigente zera o pendente. */
+void test_confirmacao_troca_de_candidato_zera(void)
+{
+    confirmacao_estado_t acc = {ESTADO_EQUIP_VERDE, 0};
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_AMARELO, 3, &acc);
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_AMARELO, 3, &acc);
+    TEST_ASSERT_EQUAL(2, acc.n_consecutivas);
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERDE,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_VERMELHO, 3, &acc));
+    TEST_ASSERT_EQUAL(1, acc.n_consecutivas);
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERMELHO, acc.candidato);
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_VERDE, 3, &acc);
+    TEST_ASSERT_EQUAL(0, acc.n_consecutivas);
+}
+
+/* 21. Histerese simétrica: o retorno ao verde também exige k. */
+void test_confirmacao_retorno_ao_verde_exige_k(void)
+{
+    confirmacao_estado_t acc = {ESTADO_EQUIP_VERDE, 0};
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_AMARELO, 3, &acc);
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_AMARELO, 3, &acc);
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_AMARELO,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_AMARELO, 3, &acc));
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_AMARELO,
+                      alerta_confirmar_estado(ESTADO_EQUIP_AMARELO,
+                                              ESTADO_EQUIP_VERDE, 3, &acc));
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_AMARELO,
+                      alerta_confirmar_estado(ESTADO_EQUIP_AMARELO,
+                                              ESTADO_EQUIP_VERDE, 3, &acc));
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERDE,
+                      alerta_confirmar_estado(ESTADO_EQUIP_AMARELO,
+                                              ESTADO_EQUIP_VERDE, 3, &acc));
+}
+
+/* 22. Defensivos: acc NULL devolve a classificação sem acumular; k grande
+ *     simplesmente nunca confirma dentro do corpus. */
+void test_confirmacao_defensivos(void)
+{
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_AMARELO,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_AMARELO, 3, NULL));
+    confirmacao_estado_t acc = {ESTADO_EQUIP_VERDE, 0};
+    (void)alerta_confirmar_estado(ESTADO_EQUIP_VERDE, ESTADO_EQUIP_AMARELO, 10, &acc);
+    TEST_ASSERT_EQUAL(ESTADO_EQUIP_VERDE,
+                      alerta_confirmar_estado(ESTADO_EQUIP_VERDE,
+                                              ESTADO_EQUIP_AMARELO, 10, &acc));
+    TEST_ASSERT_EQUAL(2, acc.n_consecutivas);
+}
+
 /* Registro dos testes — chamado pelo runner entre UNITY_BEGIN/UNITY_END. */
 void rodar_testes_alert_manager(void)
 {
@@ -403,4 +507,11 @@ void rodar_testes_alert_manager(void)
     RUN_TEST(test_sinalizacao_monitorando);
     RUN_TEST(test_sinalizacao_contingencia);
     RUN_TEST(test_sinalizacao_defensivos);
+    /* Confirmação de estado (persistência, v2.3) */
+    RUN_TEST(test_confirmacao_k1_adota_imediato);
+    RUN_TEST(test_confirmacao_blip_isolado_nao_adota);
+    RUN_TEST(test_confirmacao_tres_consecutivas_adotam);
+    RUN_TEST(test_confirmacao_troca_de_candidato_zera);
+    RUN_TEST(test_confirmacao_retorno_ao_verde_exige_k);
+    RUN_TEST(test_confirmacao_defensivos);
 }

@@ -2,7 +2,8 @@
 
 Sistema embarcado de **manutenção preditiva por análise de vibração**: um nó de
 borda (ESP32-S3 + BNO085) fixado à carcaça de um equipamento rotativo amostra a
-aceleração triaxial a ~500 Hz, calcula métricas por janela de 1 s (RMS hoje;
+aceleração triaxial a ~400 Hz (sem a gravidade, via aceleração linear), calcula
+métricas por janela de 1 s (RMS hoje;
 FFT, kurtosis e THD nas próximas fases), classifica o estado contra um baseline
 calibrado (normal / atenção / crítico) e emite alertas via MQTT + LED/buzzer.
 
@@ -14,7 +15,7 @@ Documentos normativos: `requisitos.md` (v2.1) e `SPEC.md` (derivação técnica)
 main/                      app_main: fila, tasks com pinning, wiring dos componentes
 components/
   i2c_config/              barramento I2C do BNO085
-  vibration_sensor/        aquisição ACCELEROMETER (m/s²) @500 Hz, janelamento
+  vibration_sensor/        aquisição LINEAR_ACCELERATION (m/s², sem gravidade) @400 Hz, janelamento
   signal_processing/       matemática pura do pipeline (RMS, FFT, kurtosis, THD)
   baseline/                calibração comandada (30 janelas, Welford) + NVS
   alert_manager/           classificação 3σ/6σ, votação/pior eixo, máquina de

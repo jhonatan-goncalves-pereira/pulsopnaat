@@ -45,9 +45,16 @@ esp_err_t alerta_servico_iniciar(void);
  */
 void alerta_servico_publicar_evento(evento_t evento);
 
-/* Publica o estado do equipamento classificado (task de processamento).
- * Escrita atômica; re-render no tick seguinte. */
-void alerta_servico_definir_estado_equipamento(
+/*
+ * Publica a classificação da janela (task de processamento) e devolve o
+ * estado do equipamento EFETIVO: a classificação só é adotada após
+ * CONFIG_PULSOPNAAT_ALERTA_JANELAS_CONFIRMAR janelas consecutivas do mesmo
+ * candidato (persistência, requisitos v2.3 — o acumulador é interno e só a
+ * task de processamento o toca). Escrita atômica; re-render no tick
+ * seguinte. O chamador compara o retorno com o estado anterior para
+ * anunciar somente transições confirmadas.
+ */
+estado_equipamento_t alerta_servico_definir_estado_equipamento(
     estado_equipamento_t estado_equipamento);
 
 /* Estado atual da máquina (leitura atômica — thread-safe). */

@@ -303,17 +303,20 @@ static void tarefa_processamento(void *arg)
         case ESTADO_MAQ_CONTINGENCIA: {
             /* 3σ/6σ por métrica, votação por eixo, pior eixo (RF04). Na
              * contingência o monitoramento segue localmente (publicação/buffer:
-             * ticket 04). */
+             * ticket 04). A persistência (K janelas consecutivas, requisitos
+             * v2.3) está dentro de definir_..., que devolve o estado efetivo:
+             * só transições confirmadas são anunciadas. */
             const estado_equipamento_t novo =
                 alerta_classificar_janela(&s_baseline, &metricas);
             const estado_equipamento_t anterior =
                 alerta_servico_estado_equipamento();
-            if (novo != anterior) {
+            const estado_equipamento_t efetivo =
+                alerta_servico_definir_estado_equipamento(novo);
+            if (efetivo != anterior) {
                 ESP_LOGI(TAG, "estado do equipamento: %s → %s",
                          nome_estado_equipamento(anterior),
-                         nome_estado_equipamento(novo));
+                         nome_estado_equipamento(efetivo));
             }
-            alerta_servico_definir_estado_equipamento(novo);
             break;
         }
 
@@ -342,7 +345,7 @@ void app_main(void)
     ESP_ERROR_CHECK(uart_driver_install((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM,
                                         256, 1024, 0, NULL, 0));
 
-    ESP_LOGI(TAG, "PulsoPNAAT: aquisição 500 Hz + cadeia espectral + baseline/"
+    ESP_LOGI(TAG, "PulsoPNAAT: aquisição 400 Hz + cadeia espectral + baseline/"
                   "classificação 3σ/6σ + máquina de estados + LED/buzzer "
                   "(tickets 01–03)");
 
@@ -407,7 +410,7 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "pipeline ativa: BNO085 ACCELEROMETER (0x01, m/s²) @ %d µs → "
+    ESP_LOGI(TAG, "pipeline ativa: BNO085 LINEAR_ACCELERATION (0x04, m/s² sem gravidade) @ %d µs → "
                   "janelas de %d amostras → %d métricas × 3 eixos (CSV) → "
                   "classificação 3σ/6σ → LED RGB GPIO %d/%d/%d + buzzer GPIO %d, "
                   "f0 = %d RPM/60",

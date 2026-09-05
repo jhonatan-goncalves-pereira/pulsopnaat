@@ -45,6 +45,12 @@ static TaskHandle_t s_tarefa;
 static atomic_int s_estado_maquina = ESTADO_MAQ_BOOT;
 static atomic_int s_estado_equipamento = ESTADO_EQUIP_VERDE;
 
+/* Acumulador da confirmação de estado (persistência, requisitos v2.3) —
+ * tocado SOMENTE pela task de processamento (via definir_...); o estado
+ * adotado é publicado na atômica acima. Zero-init = {VERDE, 0}: candidato
+ * VERDE, nenhuma janela pendente. */
+static confirmacao_estado_t s_confirmacao;
+
 /* Hardware de sinalização (canal desativado → cai em silencioso). */
 #define CANAL_R 0
 #define CANAL_G 1
@@ -178,10 +184,22 @@ void alerta_servico_publicar_evento(evento_t evento)
     }
 }
 
-void alerta_servico_definir_estado_equipamento(
+estado_equipamento_t alerta_servico_definir_estado_equipamento(
     estado_equipamento_t estado_equipamento)
 {
-    atomic_store(&s_estado_equipamento, (int)estado_equipamento);
+    /* Persistência (requisitos v2.3): a classificação da janela só é
+     * adotada após K janelas consecutivas do mesmo candidato — blip
+     * isolado (ex.: kurtosis sobre quantização no repouso) não muda o
+     * estado; condição real persiste e dispara. */
+    const estado_equipamento_t efetivo = alerta_confirmar_estado(
+        (estado_equipamento_t)atomic_load(&s_estado_equipamento),
+        estado_equipamento,
+        CONFIG_PULSOPNAAT_ALERTA_JANELAS_CONFIRMAR,
+        &s_confirmacao);
+    if (efetivo != (estado_equipamento_t)atomic_load(&s_estado_equipamento)) {
+        atomic_store(&s_estado_equipamento, (int)efetivo);
+    }
+    return efetivo;
 }
 
 estado_maquina_t alerta_servico_estado_maquina(void)

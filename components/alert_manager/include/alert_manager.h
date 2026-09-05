@@ -18,6 +18,11 @@
  *      VERMELHO 1 crítica OU 3+ em atenção. Estado do equipamento = PIOR
  *      eixo — falha uniaxial não é diluída (ISO 20816-3 por direção).
  *
+ *   2b. Confirmação de estado (persistência, requisitos v2.3): a classe da
+ *      janela só vira estado do equipamento após k janelas consecutivas do
+ *      mesmo candidato — um único blip (ex.: kurtosis sobre quantização no
+ *      repouso) não muda o estado; falha real persiste e dispara.
+ *
  *   3. Máquina de estados: BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA.
  *      MONITORANDO só é alcançado via EVENTO_BASELINE_DISPONIVEL (o nó
  *      nunca classifica sem baseline — RF09/user story 9).
@@ -70,6 +75,36 @@ estado_equipamento_t alerta_classificar_eixo(const baseline_t *baseline,
 /* Pior estado entre os três eixos (estado do equipamento da janela). */
 estado_equipamento_t alerta_classificar_janela(const baseline_t *baseline,
                                                const metricas_t *metricas);
+
+/* ---------------- 2b. Confirmação de estado (persistência) --------------- */
+
+/*
+ * Acumulador de confirmação — propriedade do CHAMADOR (a task que classifica
+ * as janelas; um único escritor). Zero-inicializado = {VERDE, 0}.
+ */
+typedef struct {
+    estado_equipamento_t candidato; /* último estado classificado distinto */
+    int n_consecutivas;             /* janelas consecutivas do candidato   */
+} confirmacao_estado_t;
+
+/*
+ * Confirmação de estado (debounce on/off delay de alarme, requisitos v2.3):
+ * a classificação de UMA janela só se torna o estado efetivo após k_janelas
+ * CONSECUTIVAS do mesmo candidato — o pico de uma única janela não muda o
+ * estado; uma condição real persiste e dispara.
+ *
+ *   classificado == estado_atual → acumulador zerado, estado mantém.
+ *   classificado == candidato pendente → n++; senão reinicia a contagem.
+ *   n >= k_janelas → adota (retorna `classificado`) e zera o pendente.
+ *
+ * PURA: sem estado global (o acumulador é do chamador). k_janelas ≤ 1 →
+ * adoção imediata (comportamento janela-a-janela). `acc` NULL → retorna
+ * `classificado` sem acumular (defensivo).
+ */
+estado_equipamento_t alerta_confirmar_estado(estado_equipamento_t estado_atual,
+                                             estado_equipamento_t classificado,
+                                             int k_janelas,
+                                             confirmacao_estado_t *acc);
 
 /* ------------------------ 3. Máquina de estados ------------------------- */
 

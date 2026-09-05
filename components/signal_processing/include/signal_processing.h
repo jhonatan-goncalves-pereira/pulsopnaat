@@ -26,13 +26,14 @@
 extern "C" {
 #endif
 
-/* fs = 500 Hz (taxa nativa do ACCELEROMETER do BNO085) × janela de 1 s. */
-#define JANELA_N_AMOSTRAS 500
+/* fs = 400 Hz (taxa nativa do LINEAR_ACCELERATION 0x04 do BNO085) × janela
+ * de 1 s. */
+#define JANELA_N_AMOSTRAS 400
 #define JANELA_NUM_EIXOS  3
-#define JANELA_FS_NOMINAL_HZ 500.0f
+#define JANELA_FS_NOMINAL_HZ 400.0f
 
-/* Amostras da janela (Hann + zero-padding para 512): resolução ≈ 0,98 Hz,
- * Nyquist = 250 Hz (RF03). */
+/* Amostras da janela (Hann + zero-padding para 512): resolução ≈ 0,78 Hz,
+ * Nyquist = 200 Hz (RF03). */
 #define ANALISE_FFT_N 512
 
 /* Harmônicos 1x–5x usados no THD. */
@@ -60,7 +61,8 @@ typedef struct {
 /* Métricas de uma janela, por eixo. rms/harmonicas/banda em m/s² (normalizadas
  * pelo ganho coerente da Hann); kurtosis/thd adimensionais. */
 typedef struct {
-    /* RMS = √(média(x²)) — inclui DC (gravidade ≈ 9,81 m/s² em repouso). */
+    /* RMS = √(média(x²)) — sem DC: a gravidade já é removida na aquisição
+     * pelo reporte LINEAR_ACCELERATION (0x04). */
     float rms[JANELA_NUM_EIXOS];
     /* Amplitude espectral no bin mais próximo de f0 (1x) e de 2·f0 (2x). */
     float harmonica_1x[JANELA_NUM_EIXOS];
@@ -123,7 +125,7 @@ void metricas_para_vetor(const metricas_t *metricas_out,
  * plausíveis (0,2–3 g) — esses cabem ao Hampel (`janela_hampel`). */
 bool amostra_valida(float a_mps2);
 
-/* Janela Hampel de 2k+1 = 11 amostras (~22 ms a 500 Hz): suprime impulsos
+/* Janela Hampel de 2k+1 = 11 amostras (~28 ms a 400 Hz): suprime impulsos
  * isolados sem atenuar as bandas de 1x–5x (≥ 25 Hz p/ RPM 1500). */
 #define HAMPEL_K_VIZINHOS 5
 /* Limiar em MADs. 5·MAD ≈ 5σ gaussiano: senoide + harmônicos ficam em ~1·MAD

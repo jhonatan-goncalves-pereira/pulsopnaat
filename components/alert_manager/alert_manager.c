@@ -101,6 +101,45 @@ estado_equipamento_t alerta_classificar_janela(const baseline_t *baseline,
     return estado;
 }
 
+/* ---------------- 2b. Confirmação de estado (persistência) --------------- */
+
+estado_equipamento_t alerta_confirmar_estado(estado_equipamento_t estado_atual,
+                                             estado_equipamento_t classificado,
+                                             int k_janelas,
+                                             confirmacao_estado_t *acc)
+{
+    if (acc == NULL) {
+        return classificado; /* defensivo: sem acumulador, sem confirmação */
+    }
+    if (k_janelas <= 1) {
+        /* Confirmação desativada: classificação vira estado imediatamente
+         * (comportamento janela-a-janela, padrão antes da v2.3). */
+        acc->candidato = classificado;
+        acc->n_consecutivas = 0;
+        return classificado;
+    }
+    if (classificado == estado_atual) {
+        /* Janela em linha com o estado vigente: nada pendente. */
+        acc->candidato = classificado;
+        acc->n_consecutivas = 0;
+        return estado_atual;
+    }
+    if (classificado == acc->candidato) {
+        acc->n_consecutivas++;
+    } else {
+        acc->candidato = classificado;
+        acc->n_consecutivas = 1;
+    }
+    if (acc->n_consecutivas >= k_janelas) {
+        /* Confirmado: pendente zerado — as próximas janelas em linha com o
+         * novo estado caem na ramificação `classificado == estado_atual`. */
+        acc->candidato = classificado;
+        acc->n_consecutivas = 0;
+        return classificado;
+    }
+    return estado_atual;
+}
+
 /* ------------------------ 3. Máquina de estados ------------------------- */
 
 estado_maquina_t transitar(estado_maquina_t estado, evento_t evento)

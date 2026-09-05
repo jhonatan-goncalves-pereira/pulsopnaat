@@ -1,7 +1,7 @@
 /*
  * signal_processing — implementação (ver signal_processing.h).
  *
- * Cadeia por janela e eixo: amostras (n ≤ 500) → Hann simétrica →
+ * Cadeia por janela e eixo: amostras (n ≤ 400) → Hann simétrica →
  * zero-padding p/ 512 → FFT radix-2 (dsps_fft2r_fc32 + bit-reverse).
  *
  * Gotchas:
@@ -212,7 +212,7 @@ float calcular_kurtosis_passo(const float *amostras, size_t n_amostras, size_t p
     m4 /= (double)n_amostras;
 
     /* Sinal constante (variância 0) → sem impulsividade mensurável → 0
-     * (evita divisão por zero; DC da gravidade em repouso cai aqui). */
+     * (evita divisão por zero; sinal constante cai aqui). */
     if (m2 <= 0.0) {
         return 0.0f;
     }

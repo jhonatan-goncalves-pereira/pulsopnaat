@@ -66,4 +66,19 @@ menu "PulsoPNAAT: sinalização local e comando de calibração"
             Heltec V3 (GPIO 0, ativo baixo, pull-up interno). Pressionar com
             o motor em regime saudável.
 
+    config PULSOPNAAT_ALERTA_JANELAS_CONFIRMAR
+        int "Janelas consecutivas para confirmar mudança de estado"
+        default 3
+        range 1 10
+        help
+            Persistência da classificação (requisitos v2.3, debounce estilo
+            on/off delay de alarme): a classificação de uma janela só se
+            torna o estado do equipamento após este nº de janelas
+            CONSECUTIVAS do mesmo candidato. Motivação medida on-target: no
+            repouso a kurtosis sobre ruído de quantização do 0x04 gera picos
+            de janela única (20–400) que flipavam o estado a cada janela; uma
+            falha real persiste por várias janelas e dispara normalmente.
+            1 = adoção imediata (comportamento anterior à v2.3). Com 1 s por
+            janela, 3 = alarme confirmado em 3 s (atraso de 2 s é o custo).
+
 endmenu

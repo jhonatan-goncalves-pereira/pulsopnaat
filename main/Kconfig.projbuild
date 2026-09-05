@@ -44,22 +44,22 @@ menu "PulsoPNAAT"
 
     menu "Aquisição de vibração"
         config PULSOPNAAT_SENSOR_REPORT_INTERVAL_US
-            int "Intervalo de reporte do ACCELEROMETER (µs)"
-            default 2000
+            int "Intervalo de reporte do LINEAR_ACCELERATION (µs)"
+            default 2500
             range 1000 1000000
             help
-                Período de reporte do SH2 ACCELEROMETER (0x01, valores já em
-                m/s²). O engine do BNO085 quantiza o pedido ao tick interno
-                (2 ms): 2000 µs → 500 Hz reais (confirmado no log de taxa
-                efetiva por janela). Janela de 1 s = N = 500 amostras;
-                Nyquist 250 Hz.
+                Período de reporte do SH2 LINEAR_ACCELERATION (0x04, valores
+                já em m/s² com a gravidade removida por fusão). O engine do
+                BNO085 limita/quantiza o pedido ao máximo do reporte: 400 Hz
+                (2500 µs, datasheet BNO085). Janela de 1 s = N = 400 amostras;
+                Nyquist 200 Hz.
 
         config PULSOPNAAT_FILA_JANELAS
             int "Profundidade da fila de janelas (amostragem → processamento)"
             default 2
             range 1 8
             help
-                Cada item é uma janela triaxial de 500×3 amostras float
+                Cada item é uma janela triaxial de 400×3 amostras float
                 (~4,8 KB). Fila cheia → a janela mais antiga é descartada
                 (overwrite-oldest), para que a amostragem nunca seja bloqueada
                 nem atrasada pelo consumo; o descarte é contado e registrado
@@ -75,9 +75,9 @@ menu "PulsoPNAAT"
                 Rotação nominal do equipamento monitorado. Define a frequência
                 fundamental f0 = RPM/60 (Hz) usada no mapeamento dos bins
                 harmônicos da FFT: 1x = f0, 2x = 2·f0 e banda 3x–5x =
-                [3·f0, 5·f0]. Com fs = 500 Hz (Nyquist 250 Hz), rotações até
-                ~3000 RPM mantêm a banda 5x dentro do espectro confiável
-                (requisitos v2.1, §Nyquist). Configurado por equipamento no
+                [3·f0, 5·f0]. Com fs = 400 Hz (Nyquist 200 Hz), rotações até
+                ~2400 RPM mantêm a banda 5x dentro do espectro confiável
+                (requisitos v2.2, §Nyquist). Configurado por equipamento no
                 boot; não há autodetecção de f0 (decisão travada).
     endmenu
 

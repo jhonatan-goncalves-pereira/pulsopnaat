@@ -26,19 +26,24 @@ static const char *TAG = "vibration_sensor";
  * tolerância). Com CONFIG_FREERTOS_HZ=100, cada tick vale 10 ms. */
 #define TIMEOUT_SERVICO_MS 20
 
-/* Faixa aceitável da taxa efetiva em torno dos 500 Hz nominais (±10%). */
-#define TAXA_MIN_HZ 450.0f
-#define TAXA_MAX_HZ 550.0f
+/* Faixa aceitável da taxa efetiva em torno da nominal (±10%). O reporte
+ * LINEAR_ACCELERATION (0x04) sustenta no máx. 400 Hz (datasheet BNO085);
+ * o engine pode quantizar o pedido — a faixa cobre a variação. */
+#define TAXA_MIN_HZ (0.9f * JANELA_FS_NOMINAL_HZ)
+#define TAXA_MAX_HZ (1.1f * JANELA_FS_NOMINAL_HZ)
 
 #define BNO085_INT_GPIO ((gpio_num_t)CONFIG_APP_BNO085_INT_GPIO)
 #define BNO085_RST_GPIO ((gpio_num_t)CONFIG_APP_BNO085_RST_GPIO)
 
 /*
- * Reporte ACCELEROMETER (0x01): o SH-2 entrega valores JÁ em m/s², sem
- * constante de conversão no nosso lado (o RAW foi descartado por não ter
- * escala documentada — decisão em SPEC.md, Barramento e sensor). Risco
- * residual aceito: degraus de bias lentos quando o estimador recalibra,
- * fora da banda de vibração e absorvidos pelo baseline.
+ * Reporte LINEAR_ACCELERATION (0x04): o SH-2 entrega valores JÁ em m/s², com a
+ * gravidade removida por fusão (requisitos.md v2.2) — o RMS deixa de ser
+ * dominado pelo DC de ~9,81 m/s² e passa a medir só vibração. O RAW foi
+ * descartado por não ter escala documentada — decisão em SPEC.md (Barramento
+ * e sensor). Riscos residuais aceitos: transiente do engine de fusão no boot
+ * (antes de convergir a estimativa de gravidade) e artefatos quando ele
+ * recalibra — a calibração do baseline é comandada pelo operador, portanto
+ * após a convergência.
  */
 
 static bno085_handle_t s_bno085 = NULL;
@@ -72,21 +77,21 @@ static void callback_amostra(bno085_handle_t handle,
     (void)handle;
     (void)ctx;
 
-    if (valor == NULL || valor->sensor_id != BNO085_SENSOR_ACCELEROMETER) {
+    if (valor == NULL || valor->sensor_id != BNO085_SENSOR_LINEAR_ACCELERATION) {
         return;
     }
     if (s_janela.n_amostras >= JANELA_N_AMOSTRAS) {
         return; /* Janela cheia aguardando envio pelo laço da task. */
     }
 
-    const float ax = valor->data.accelerometer.x;
-    const float ay = valor->data.accelerometer.y;
-    const float az = valor->data.accelerometer.z;
+    const float ax = valor->data.linear_acceleration.x;
+    const float ay = valor->data.linear_acceleration.y;
+    const float az = valor->data.linear_acceleration.z;
 
     /* Backstop físico RNF07: rejeita leituras impossíveis (|a| > 20 g ou
      * não-finitas) ANTES de entrar na janela. Glitches plausíveis (0,2–3 g)
      * não são pegos aqui — ficam para o Hampel. Rejeição = janela fica com
-     * <500 amostras (raro). */
+     * <400 amostras (raro). */
     if (!amostra_valida(ax) || !amostra_valida(ay) || !amostra_valida(az)) {
         return;
     }
@@ -137,7 +142,7 @@ static void finalizar_e_enviar_janela(void)
                   " (enviadas=%lu descartadas=%lu)",
                   (unsigned long)s_janelas_enviadas, (unsigned long)n,
                   delta_ms, taxa_hz,
-                  taxa_ok ? "" : " [FORA DA FAIXA ~500 Hz]",
+                  taxa_ok ? "" : " [FORA DA FAIXA ~400 Hz]",
                   (unsigned long)s_janelas_enviadas,
                   (unsigned long)s_janelas_descartadas);
 
@@ -200,9 +205,9 @@ esp_err_t vibration_sensor_start(i2c_master_dev_handle_t bno085_i2c_dev,
 
     ESP_RETURN_ON_ERROR(bno085_register_sensor_callback(s_bno085, callback_amostra, NULL),
                         TAG, "falha ao registrar callback");
-    ESP_RETURN_ON_ERROR(bno085_enable_sensor(s_bno085, BNO085_SENSOR_ACCELEROMETER,
+    ESP_RETURN_ON_ERROR(bno085_enable_sensor(s_bno085, BNO085_SENSOR_LINEAR_ACCELERATION,
                                              CONFIG_PULSOPNAAT_SENSOR_REPORT_INTERVAL_US),
-                        TAG, "falha ao habilitar ACCELEROMETER");
+                        TAG, "falha ao habilitar LINEAR_ACCELERATION");
 
     const BaseType_t rc = xTaskCreatePinnedToCore(
         tarefa_amostragem, "amostragem", TAREFA_AMOSTRAGEM_STACK, NULL,
