@@ -1,26 +1,14 @@
 /*
- * app_main — montagem do sistema (PulsoPNAAT): cria as filas e as tasks com
- * pinning de núcleo e conecta os componentes (tickets 01–03).
+ * app_main — montagem do sistema (PulsoPNAAT): filas, tasks com pinning e
+ * conexão dos componentes (tickets 01–03).
  *
- * Pipeline de aquisição→janelamento→análise→decisão→sinalização:
+ * Pipeline: BNO085 → vibration_sensor (amostragem, core 0) → fila janela_t →
+ * processamento (core 1): Hampel + analisar_janela (RMS, Hann, FFT-512,
+ * harmônicos, kurtosis, THD) → baseline (30 janelas, Welford) ou classificação
+ * 3σ/6σ (votação por eixo, pior eixo) → alerta_servico (LED/buzzer).
  *
- *   [BNO085] --I2C--> [vibration_sensor] --Queue(janela_t)--> [processamento]
- *    ACCEL (m/s²)      task amostragem          500×3 floats    task core 1
- *    ~500 Hz           core 0, prio alta        janela de 1 s   prio média
- *                                                               │
- *                     analisar_janela(janela, f0, ·) + máquina (alerta_servico)
- *                     RMS + Hann + FFT-512 + harmônicos + kurtosis + THD
- *                                                               │
- *        ┌──────────────────────────────────────────────────────┘
- *        ├─ CALIBRANDO: métricas alimentam o baseline (30 janelas, Welford)
- *        │              → salvar em NVS → EVENTO_BASELINE_DISPONIVEL
- *        └─ MONITORANDO/CONTINGÊNCIA: classificação 3σ/6σ por métrica,
- *                       votação por eixo, pior eixo → estado do equipamento
- *                       → LED RGB externo + buzzer (RF04/RF06/RF08)
- *
- * Tasks de comando (esta main): botão BOOT e linha serial "calibrar" —
- * a calibração é SEMPRE comandada (RF08), nunca automática no boot. O nó só
- * entra em MONITORANDO com baseline válido (NVS do boot ou recém-calibrado).
+ * Calibração SEMPRE comandada (botão/serial — RF08), nunca automática no
+ * boot; o nó só entra em MONITORANDO com baseline válido.
  */
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -47,17 +35,15 @@
 
 static const char *TAG = "app_main";
 
-/* Processamento no core 1, prioridade média, isolado da amostragem (core 0)
- * para que o cálculo das métricas tenha timing determinístico.
- * Stack: 8 KB — o buffer de janela fica EM STATIC (4,8 KB não caberiam na
- * pilha; estouro canônico detectado on-device); o esp-dsp usa buffers
- * estáticos internos do componente, não a pilha. */
+/* Core 1 isolado da amostragem (core 0) para timing determinístico.
+ * Stack 8 KB: a janela fica em static (~4,8 KB não cabem na pilha — estouro
+ * medido on-device); os buffers do esp-dsp são internos ao componente. */
 #define TAREFA_PROCESSAMENTO_CORE 1
 #define TAREFA_PROCESSAMENTO_PRIORIDADE 5
 #define TAREFA_PROCESSAMENTO_STACK 8192
 
-/* Task de comandos: botão (polling com debounce) + linha serial. Trivial —
- * core 0, prioridade baixa (acima do idle, abaixo da amostragem). */
+/* Task de comandos: botão (polling/debounce) + serial — core 0, prioridade
+ * baixa (acima do idle, abaixo da amostragem). */
 #define TAREFA_COMANDOS_CORE 0
 #define TAREFA_COMANDOS_PRIORIDADE 2
 #define TAREFA_COMANDOS_STACK 4096
@@ -68,9 +54,8 @@ static const char *TAG = "app_main";
 
 static QueueHandle_t s_fila_janelas;
 
-/* Baseline vigente (carregado da NVS no boot ou recém-calibrado) e o
- * acumulador da calibração em curso — usados apenas pela task de
- * processamento (consumo single-task, como o buffer de janela). */
+/* Baseline vigente + acumulador da calibração — só a task de processamento
+ * toca (single-consumer, como o buffer de janela). */
 static baseline_t s_baseline;
 static baseline_calibracao_t s_calibracao;
 static bool s_baseline_presente;
@@ -109,13 +94,11 @@ static const char *nome_estado_equipamento(estado_equipamento_t e)
 
 /* --------------------------- task de comandos ---------------------------- */
 
-/* Linha de comando serial — RF08 ("comando serial"). Disponíveis:
- *   calibrar → dispara a coleta das 30 janelas do baseline
- *   status   → estado da máquina, do equipamento e do baseline            */
+/* Comandos serial (RF08): "calibrar" e "status". */
 static void processar_linha(const char *linha)
 {
     if (linha[0] == '\0') {
-        return; /* linha vazia (enter) */
+        return;
     }
     if (strcasecmp(linha, "calibrar") == 0) {
         ESP_LOGI(TAG, "comando serial: calibrar (máquina em %s — o comando só "
@@ -151,9 +134,8 @@ static void tarefa_comandos(void *arg)
 {
     (void)arg;
 
-    /* Botão físico de calibração (RF08) — ativo baixo, pull-up interno.
-     * Debounce por contagem de leituras estáveis no tick de 20 ms
-     * (~40 ms para firmar pressionado e solto). */
+    /* Botão de calibração (RF08): ativo baixo, pull-up interno. Debounce por
+     * contagem de leituras estáveis (2 ticks de 20 ms para firmar). */
     const gpio_num_t botao =
         (gpio_num_t)CONFIG_PULSOPNAAT_BOTAO_CALIBRACAO_GPIO;
     gpio_config_t cfg_botao = {
@@ -215,14 +197,12 @@ static void tarefa_comandos(void *arg)
 static void tarefa_processamento(void *arg)
 {
     (void)arg;
-    /* f0 = RPM_nominal/60 — configurado por equipamento no boot (Kconfig,
-     * sem autodetecção); fixo durante a execução. */
+    /* f0 = RPM_nominal/60 — Kconfig no boot, fixo na execução. */
     const float f0_hz = (float)CONFIG_PULSOPNAAT_RPM_NOMINAL / 60.0f;
 
-    /* janela_t (~4,8 KB) em static: estouraria a pilha da task. Consumo é
-     * single-task (esta), então não há disputa pelo buffer — e o mesmo
-     * single-consumer torna os buffers de rascunho do signal_processing e os
-     * acumuladores de baseline/classificação seguros. */
+    /* janela_t (~4,8 KB) em static: estouraria a pilha da task. Consumo
+     * single-task por esta task — o que também torna seguros os buffers de
+     * rascunho do signal_processing e os acumuladores de baseline. */
     static janela_t janela;
     metricas_t metricas;
 
@@ -244,6 +224,11 @@ static void tarefa_processamento(void *arg)
 
         /* RNF01: medição da latência de processamento (entrada → saída). */
         const int64_t t0 = esp_timer_get_time();
+
+        /* Hampel: remove glitches plausíveis (0,2–3 g) do transporte I2C/SHTP
+         * que passam pelo backstop físico e inflacionam RMS/kurtosis. */
+        (void)janela_hampel(&janela, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD);
+
         analisar_janela(&janela, f0_hz, &metricas);
         const int64_t latencia_us = esp_timer_get_time() - t0;
 
@@ -291,9 +276,8 @@ static void tarefa_processamento(void *arg)
                     s_baseline_presente = true;
                     const esp_err_t err = baseline_salvar_nvs(&s_baseline);
                     if (err != ESP_OK) {
-                        /* Baseline válido em RAM; sem persistência, um reboot
-                         * pedirá recalibração (RF08 torna a NVS desejável,
-                         * não obrigatória). */
+                        /* Baseline válido em RAM; reboot pedirá recalibração
+                         * (NVS desejável, não obrigatória — RF08). */
                         ESP_LOGW(TAG, "calibração OK, mas não persistiu na "
                                       "NVS: %s", esp_err_to_name(err));
                     } else {
@@ -302,8 +286,7 @@ static void tarefa_processamento(void *arg)
                     }
                     alerta_servico_publicar_evento(EVENTO_BASELINE_DISPONIVEL);
                 } else {
-                    /* Métricas degeneradas (ex.: lixo do sensor — o filtro de
-                     * spikes é ticket 05): reinicia a coleta em vez de
+                    /* Métricas degeneradas: reinicia a coleta em vez de
                      * persistir um baseline inutilizável. */
                     ESP_LOGE(TAG, "métricas inválidas na calibração — "
                                   "coleta reiniciada");
@@ -318,9 +301,9 @@ static void tarefa_processamento(void *arg)
 
         case ESTADO_MAQ_MONITORANDO:
         case ESTADO_MAQ_CONTINGENCIA: {
-            /* Classificação: 3σ/6σ por métrica, votação por eixo, pior eixo
-             * (RF04). Na contingência o monitoramento segue localmente — a
-             * publicação/buffer é o ticket 04. */
+            /* 3σ/6σ por métrica, votação por eixo, pior eixo (RF04). Na
+             * contingência o monitoramento segue localmente (publicação/buffer:
+             * ticket 04). */
             const estado_equipamento_t novo =
                 alerta_classificar_janela(&s_baseline, &metricas);
             const estado_equipamento_t anterior =
@@ -336,8 +319,8 @@ static void tarefa_processamento(void *arg)
 
         case ESTADO_MAQ_BOOT:
         default:
-            /* Sem baseline decidido: nada a classificar (o nó NUNCA
-             * classifica sem baseline — user story 9). */
+            /* Sem baseline: nada a classificar (o nó NUNCA classifica sem
+             * baseline — user story 9). */
             if (!avisou_sem_baseline) {
                 avisou_sem_baseline = true;
                 ESP_LOGW(TAG, "sem baseline: janelas descartadas até a "
@@ -352,12 +335,10 @@ static void tarefa_processamento(void *arg)
 
 void app_main(void)
 {
-    /* Instala o driver da UART de console com ring buffer de TX antes de
-     * qualquer printf(). Sem isso, printf() usa busy-wait caractere a caractere
-     * — a 115200 baud, uma linha grande pode girar a CPU tempo suficiente para
-     * matar a task IDLE e derrubar o watchdog. Com o driver, as escritas são
-     * interrompidas por IRQ e a task bloqueia/cede (e a tarefa de comandos
-     * lê a ENTRADA pela mesma UART). */
+    /* Driver da UART de console com ring buffer de TX antes de qualquer
+     * printf(): sem isso printf() é busy-wait por caractere e uma linha grande
+     * gira a CPU até derrubar a IDLE/watchdog. Também serve a entrada da
+     * tarefa de comandos. */
     ESP_ERROR_CHECK(uart_driver_install((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM,
                                         256, 1024, 0, NULL, 0));
 
@@ -368,8 +349,8 @@ void app_main(void)
     /* Tabelas do esp-dsp para a FFT (idempotente; aborta no boot se falhar). */
     signal_processing_init();
 
-    /* NVS — persistência do baseline (RF08). Padrão do IDF: partição sem
-     * páginas livres/versão nova → apaga e reinicia o init. */
+    /* NVS (RF08). Padrão do IDF: sem páginas livres/versão nova → apaga e
+     * reinicia o init. */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
         err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -378,13 +359,11 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
 
-    /* Serviço de alerta ANTES de qualquer evento — cria a fila de eventos e a
-     * task coordenadora (máquina de estados + LED/buzzer), que parte de BOOT. */
+    /* Serviço de alerta ANTES de qualquer evento (cria fila + task coordenadora). */
     ESP_ERROR_CHECK(alerta_servico_iniciar());
 
-    /* Baseline persistido? Carrega e entra em MONITORANDO direto — nunca
-     * recalibra no boot sem comando (RF08), e nunca monitora sem baseline
-     * (user story 9). */
+    /* Baseline da NVS → MONITORANDO direto: nunca recalibra no boot sem
+     * comando (RF08) nem monitora sem baseline (user story 9). */
     err = baseline_carregar_nvs(&s_baseline);
     if (err == ESP_OK) {
         s_baseline_presente = true;
@@ -399,10 +378,8 @@ void app_main(void)
                  esp_err_to_name(err));
     }
 
-    /* Fila de janelas: itens do tipo janela_t (~4,8 KB por cópia). Profundidade
-     * curta de propósito — atraso acumulado indica consumo lento e a política
-     * é descartar a janela mais antiga (vibration_sensor), nunca travar a
-     * amostragem. */
+    /* Fila de janelas (janela_t, ~4,8 KB por cópia). Profundidade curta de
+     * propósito: fila cheia → descarta a mais antiga, nunca trava a amostragem. */
     s_fila_janelas = xQueueCreate(CONFIG_PULSOPNAAT_FILA_JANELAS, sizeof(janela_t));
     if (s_fila_janelas == NULL) {
         ESP_LOGE(TAG, "falha ao criar fila de janelas");

@@ -12,12 +12,15 @@
 #include "sdkconfig.h"
 #include "signal_processing.h"
 
+#include <string.h>
+
 static const char *TAG = "vibration_sensor";
 
-/* Amostragem no core 0, prioridade alta. */
+/* Amostragem no core 0, prioridade alta. Stack 8 KB: o caminho do callback
+ * carrega unions grandes (sh2_SensorValue_t); high-water ~2,1 KB medido. */
 #define TAREFA_AMOSTRAGEM_CORE      0
 #define TAREFA_AMOSTRAGEM_PRIORIDADE 10
-#define TAREFA_AMOSTRAGEM_STACK     4096
+#define TAREFA_AMOSTRAGEM_STACK     8192
 
 /* Rede de segurança: bombeia o serviço mesmo sem INT (período > 2 janelas de
  * tolerância). Com CONFIG_FREERTOS_HZ=100, cada tick vale 10 ms. */
@@ -31,14 +34,11 @@ static const char *TAG = "vibration_sensor";
 #define BNO085_RST_GPIO ((gpio_num_t)CONFIG_APP_BNO085_RST_GPIO)
 
 /*
- * Reporte ACCELEROMETER (0x01): o SH-2 entrega valores JÁ em m/s² (Q8 fixo,
- * decodificado pela lib sh2), sem constante de conversão no nosso lado. Não é
- * produto de fusão — é o acelerômetro com correção de bias do engine de
- * calibração. Decisão registrada em SPEC.md (Barramento e sensor); o RAW
- * (0x14) foi descartado por não ter escala documentada (ficaria uma constante
- * não validada no código). Risco residual conhecido e aceito: degraus de bias
- * quando o estimador recalibra — lentos (<< 1 Hz), fora da banda de vibração
- * e absorvidos pela classificação relativa ao baseline.
+ * Reporte ACCELEROMETER (0x01): o SH-2 entrega valores JÁ em m/s², sem
+ * constante de conversão no nosso lado (o RAW foi descartado por não ter
+ * escala documentada — decisão em SPEC.md, Barramento e sensor). Risco
+ * residual aceito: degraus de bias lentos quando o estimador recalibra,
+ * fora da banda de vibração e absorvidos pelo baseline.
  */
 
 static bno085_handle_t s_bno085 = NULL;
@@ -79,10 +79,22 @@ static void callback_amostra(bno085_handle_t handle,
         return; /* Janela cheia aguardando envio pelo laço da task. */
     }
 
+    const float ax = valor->data.accelerometer.x;
+    const float ay = valor->data.accelerometer.y;
+    const float az = valor->data.accelerometer.z;
+
+    /* Backstop físico RNF07: rejeita leituras impossíveis (|a| > 20 g ou
+     * não-finitas) ANTES de entrar na janela. Glitches plausíveis (0,2–3 g)
+     * não são pegos aqui — ficam para o Hampel. Rejeição = janela fica com
+     * <500 amostras (raro). */
+    if (!amostra_valida(ax) || !amostra_valida(ay) || !amostra_valida(az)) {
+        return;
+    }
+
     const uint32_t i = s_janela.n_amostras;
-    s_janela.amostras[i][EIXO_X] = valor->data.accelerometer.x;
-    s_janela.amostras[i][EIXO_Y] = valor->data.accelerometer.y;
-    s_janela.amostras[i][EIXO_Z] = valor->data.accelerometer.z;
+    s_janela.amostras[i][EIXO_X] = ax;
+    s_janela.amostras[i][EIXO_Y] = ay;
+    s_janela.amostras[i][EIXO_Z] = az;
 
     if (!s_janela_iniciada) {
         s_janela.ts_primeira_us = valor->timestamp_us;
@@ -105,8 +117,8 @@ static void finalizar_e_enviar_janela(void)
                                : 0.0f;
 
     if (xQueueSend(s_fila_janelas, &s_janela, 0) != pdTRUE) {
-        /* Fila cheia: descarta a janela mais antiga para nunca bloquear a
-         * amostragem — a task de processamento está atrasada. */
+        /* Fila cheia: descarta a janela mais antiga — amostragem nunca
+         * bloqueia mesmo com o consumo atrasado. */
         janela_t antiga;
         if (xQueueReceive(s_fila_janelas, &antiga, 0) == pdTRUE) {
             s_janelas_descartadas++;
@@ -129,7 +141,6 @@ static void finalizar_e_enviar_janela(void)
                   (unsigned long)s_janelas_enviadas,
                   (unsigned long)s_janelas_descartadas);
 
-    /* Reinicia o buffer da janela. */
     memset(&s_janela, 0, sizeof(s_janela));
     s_janela_iniciada = false;
 }

@@ -1,32 +1,22 @@
 /*
- * alerta_servico — face on-device do alert_manager (PulpoPNAAT, ticket 03).
+ * alerta_servico — face on-device do alert_manager (PulsoPNAAT, ticket 03).
  *
  * O núcleo puro (alert_manager.h) define A LÓGICA; este serviço é o
- * coordenador de hardware da SPEC ("Coordinator / state machine — aciona
- * LED/buzzer conforme estado"):
+ * coordenador de hardware: task coordenadora consome a fila de eventos
+ * (publicada por botão/serial e pela task de processamento), aplica
+ * transitar() e re-renderiza alerta_sinalizar() → LED RGB externo (3 GPIOs)
+ * + buzzer a cada tick de 100 ms.
  *
- *   [botão BOOT]/[serial "calibrar"] ──evento──►  fila de eventos
- *   [task de processamento] ──BASELINE_DISPONIVEL / estado equip.──┘
- *                                                    │
- *                                     task coordenadora (esta)
- *                                     transitar() + alerta_sinalizar()
- *                                                    │
- *                              LED RGB externo (3 GPIOs) + buzzer
+ * - Único ESCRITOR do estado da máquina (task coordenadora); demais tasks
+ *   consultam via leitura atômica.
+ * - Estado do equipamento publicado pela task de processamento (escrita
+ *   atômica de 32 bits), re-renderizado no tick seguinte (≤ 100 ms).
+ * - LED: RGB externo de 3 canais discretos (um GPIO por cor, polaridade via
+ *   Kconfig) — a Heltec V3 não tem LED RGB endereçável utilizável.
+ * - Buzzer ATIVO em GPIO digital (nível via Kconfig).
  *
- * - Único ESCRITOR do estado da máquina (a task coordenadora); demais tasks
- *   consultam via `alerta_servico_estado_maquina()` (leitura atômica).
- * - O estado do equipamento é publicado pela task de processamento
- *   (`alerta_servico_definir_estado_equipamento`, escrita atômica de 32
- *   bits) e re-renderizado no tick de LED seguinte (≤ 100 ms).
- * - LED: RGB EXTERNO de 3 canais discretos (um GPIO por cor, resistor série,
- *   polaridade via Kconfig) — as cores são os próprios nomes dos estados
- *   (verde/amarelo/vermelho); padrões piscantes distinguem calibrando e
- *   sem-conectividade. A Heltec V3 não tem LED RGB endereçável utilizável.
- * - Buzzer: GPIO digital (buzzer ATIVO, nível configurável em Kconfig).
- *
- * WIFI_CAIR/WIFI_RESTAURADO já existem na máquina, mas nenhum produtor os
- * emite no ticket 03 (conectividade é o ticket 04) — a CONTINGÊNCIA é
- * alcançável/testável na lógica pura e fica wired no 04.
+ * WIFI_CAIR/WIFI_RESTAURADO existem na máquina mas nenhum produtor os emite
+ * no ticket 03 (conectividade é o ticket 04) — CONTINGÊNCIA fica wired lá.
  */
 #pragma once
 
@@ -55,8 +45,8 @@ esp_err_t alerta_servico_iniciar(void);
  */
 void alerta_servico_publicar_evento(evento_t evento);
 
-/* Publica o estado do equipamento classificado na janela (task de
- * processamento). Escrita atômica; re-render no tick seguinte. */
+/* Publica o estado do equipamento classificado (task de processamento).
+ * Escrita atômica; re-render no tick seguinte. */
 void alerta_servico_definir_estado_equipamento(
     estado_equipamento_t estado_equipamento);
 

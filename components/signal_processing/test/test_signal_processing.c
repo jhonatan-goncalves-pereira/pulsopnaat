@@ -1,46 +1,16 @@
 /*
- * Testes Unity do componente signal_processing — corpus executado ON-TARGET
- * (app de teste `test_app`, componente `unity` do ESP-IDF):
+ * Testes Unity do signal_processing — corpus executado ON-TARGET (test_app):
+ *   idf.py -C test_app build flash monitor → "N Tests, 0 Failures, OK"
  *
- *   idf.py -C test_app build flash monitor
- *   → resumo Unity no serial (N Tests, 0 Failures, OK)
+ * Convenção (API core do Unity): funções de teste públicas registradas em
+ * rodar_testes_signal_processing(), chamada pelo runner entre
+ * UNITY_BEGIN()/UNITY_END(). setUp()/tearDown() vivem AQUI (único arquivo;
+ * símbolo duplicado senão). O índice dos casos é a lista de RUN_TEST no fim.
  *
- * Convenção (API core do Unity, sem macros específicas do IDF): as funções de
- * teste são públicas e registradas em `rodar_testes_signal_processing()`,
- * chamada pelo runner entre UNITY_BEGIN()/UNITY_END().
- *
- * setUp()/tearDown() vivem AQUI. Quando surgirem outros test_*.c no projeto,
- * movê-los para um arquivo comum único (símbolo duplicado senão).
- *
- * Casos cobertos:
- *   RMS (ticket 01):
- *     1. Senoide pura com períodos inteiros na janela → RMS = A/√2 (por eixo).
- *     2. Sinal DC (gravidade em repouso)              → RMS = |DC|.
- *     3. Senoide + DC                                 → √(A²/2 + DC²).
- *     4. Janela zerada / nula / métricas nulas        → 0, defensivos.
- *     5. Janela parcial (n_amostras < N)              → RMS sobre n dado.
- *     6. n_amostras > N é limitado (sem ler fora do buffer).
- *     7. Utilitários calcular_rms / calcular_rms_passo.
- *   Cadeia espectral (ticket 02) — tolerâncias calibradas numericamente
- *   (protótipo float32 host, DFT naive = pior caso que o FFT do esp-dsp):
- *     8. Senoide pura em f0 (bin alinhado)  → 1x ≈ A, demais harmônicos ≈ 0,
- *        THD ≈ 0.
- *     9. Senoide em 2f0                     → 2x ≈ A, 1x ≈ 0, THD = 0
- *        (guarda: fundamental ausente → 0, não razão entre vazamentos).
- *    10. Senoide em 4f0                     → banda 3x–5x ≈ A, 1x/2x ≈ 0.
- *    11. Composta f0 + 3f0 (0,5·A)          → THD ≈ 0,5 (definição exata).
- *    12. Isolamento por eixo                → espectro de um eixo não vaza.
- *    13. f0 inválido (≤ 0)                  → espectrais 0; RMS/kurtosis ok.
- *    14. DC (gravidade)                     → 1x ≈ 0, THD = 0 (guarda).
- *    15. f0 acima de Nyquist/2              → 1x com scalloping conhecido;
- *        2x/banda fora de Nyquist → 0.
- *    16. Kurtosis: senoide → −1,5; impulsiva → alta (≫ 3); DC → 0;
- *        utilitário direto ({−1,+1} → −2) e defensivos.
- *
- * Frequências de teste: f0 = 31,25 Hz = 32 · (500/512) — cai EXATAMENTE no
- * bin 32 da FFT-512; harmônicos 2x..5x caem nos bins 64/96/128/160. Com a
- * Hann aplicada, tom em bin alinhado concentra a energia no bin + 2 vizinhos
- * (vazamento teoricamente nulo nos bins harmônicos distantes).
+ * Frequências: f0 = 31,25 Hz = 32 · (500/512) cai EXATAMENTE no bin 32 da
+ * FFT-512; harmônicos 2x..5x caem nos bins 64/96/128/160. Com Hann, tom em
+ * bin alinhado concentra a energia no bin + 2 vizinhos (vazamento nulo nos
+ * bins harmônicos distantes).
  */
 #include "unity.h"
 
@@ -56,19 +26,19 @@
 #define F0_TESTE 31.25f
 
 /*
- * Buffers de teste FORA da pilha: janela_t tem ~4,8 KB — na pilha estouraria a
- * task main do IDF (3,5 KB por padrão) e pilhas host limitadas. Os testes rodam
- * sequencialmente numa única thread e ambos os buffers são completamente
- * (re)inicializados antes de cada leitura (preencher_senoide zera tudo;
- * analisar_janela escreve todas as métricas), então o compartilhamento é seguro.
+ * Buffers de teste FORA da pilha: janela_t tem ~4,8 KB — estouraria a task
+ * main do IDF. Testes rodam sequencialmente numa única thread e os buffers
+ * são (re)inicializados totalmente antes de cada leitura (preencher_senoide
+ * zera tudo; analisar_janela escreve todas as métricas) — compartilhamento
+ * seguro.
  */
 static janela_t j;
 static metricas_t m;
 
 void setUp(void)
 {
-    /* Nenhum estado global entre testes (componente é puro); os buffers j/m
-     * acima são sempre totalmente reinicializados por cada teste antes do uso. */
+    /* Sem estado global entre testes (componente puro); buffers j/m acima
+     * são sempre reinicializados por cada teste antes do uso. */
 }
 
 void tearDown(void)
@@ -76,11 +46,11 @@ void tearDown(void)
 }
 
 /* Preenche a janela com zeros e, no eixo indicado, com
- * x(t) = dc + A·sen(2π·f·t), fs = 500 Hz (normativo), n amostras. */
+ * x(t) = dc + A·sen(2π·f·t), fs = 500 Hz, n amostras. */
 static void preencher_senoide(janela_t *j, eixo_t eixo, float amplitude, float freq_hz,
                               float dc, uint32_t n)
 {
-    const float fs = JANELA_FS_NOMINAL_HZ; /* Normativo: fs = 500 Hz, janela de 1 s (N=500). */
+    const float fs = JANELA_FS_NOMINAL_HZ;
     j->n_amostras = n;
     j->ts_primeira_us = 1000000;
     j->ts_ultima_us = 1000000 + (uint64_t)((n - 1) * 1000000.0f / fs);
@@ -195,9 +165,7 @@ void test_janela_parcial_usa_n_amostras(void)
     TEST_ASSERT_FLOAT_WITHIN(0.05f, -1.5f, m.kurtosis[EIXO_X]);
 }
 
-/* 6. n_amostras > JANELA_N_AMOSTRAS é limitado — sem ler fora do buffer.
- *    Com todo o buffer preenchido por senoide A=1, RMS deve ser A/√2;
- *    se o limite não existisse, a leitura além de 400 seria indefinida. */
+/* 6. n_amostras > JANELA_N_AMOSTRAS é limitado — sem ler fora do buffer. */
 void test_n_amostras_acima_do_maximo_e_limitado(void)
 {
     preencher_senoide(&j, EIXO_X, 1.0f, 10.0f, 0.0f, JANELA_N_AMOSTRAS);
@@ -292,9 +260,7 @@ void test_espectral_isolamento_por_eixo(void)
 }
 
 /* 13. f0 inválido (≤ 0) → métricas espectrais zeradas; RMS e kurtosis
- *     (que não dependem de f0) permanecem corretos. Senoide a 10 Hz (10
- *     ciclos inteiros) para expectativas exatas — o conteúdo do sinal é
- *     irrelevante aqui, pois nenhuma métrica espectral é calculada. */
+ *     (que não dependem de f0) permanecem corretos. */
 void test_espectral_f0_invalido(void)
 {
     preencher_senoide(&j, EIXO_X, 2.0f, 10.0f, 0.0f, JANELA_N_AMOSTRAS);
@@ -307,8 +273,8 @@ void test_espectral_f0_invalido(void)
     TEST_ASSERT_FLOAT_WITHIN(0.05f, -1.5f, m.kurtosis[EIXO_X]);
 }
 
-/* 14. DC de gravidade: sem fundamental (1x ≈ vazamento de DC ≈ 10⁻⁴) e THD = 0
- *     pela guarda (V₁ ≤ 10⁻³·RMS); kurtosis = 0 (variância nula). */
+/* 14. DC de gravidade: sem fundamental e THD = 0 pela guarda (V₁ ≤ 10⁻³·RMS);
+ *     kurtosis = 0 (variância nula). */
 void test_espectral_dc_sem_fundamental(void)
 {
     preencher_senoide(&j, EIXO_Z, 0.0f, F0_TESTE, -9.81f, JANELA_N_AMOSTRAS);
@@ -428,6 +394,133 @@ void test_metricas_para_vetor_defensivos(void)
     }
 }
 
+/* ------------------------- backstop RNF07 + Hampel (issue 5) ------------------------- */
+
+/* Constrói um float a partir dos seus bits (para injetar 0x60000000 etc.). */
+static float float_de_bits(uint32_t b)
+{
+    float f;
+    memcpy(&f, &b, sizeof(f));
+    return f;
+}
+
+static void test_amostra_valida_basico(void)
+{
+    /* Valores plausíveis. */
+    TEST_ASSERT_TRUE(amostra_valida(0.0f));
+    TEST_ASSERT_TRUE(amostra_valida(9.80665f));      /* gravidade */
+    TEST_ASSERT_TRUE(amostra_valida(-9.80665f));
+    TEST_ASSERT_TRUE(amostra_valida(100.0f));       /* ~10 g, dentro do limite */
+    TEST_ASSERT_TRUE(amostra_valida(-100.0f));
+    /* Limite exato (20 g) — inclusivo. */
+    TEST_ASSERT_TRUE(amostra_valida(AMOSTRA_LIMITE_FISICO_MPS2));
+    TEST_ASSERT_TRUE(amostra_valida(-AMOSTRA_LIMITE_FISICO_MPS2));
+    /* Acima do limite — rejeita. */
+    TEST_ASSERT_FALSE(amostra_valida(AMOSTRA_LIMITE_FISICO_MPS2 + 0.001f));
+    TEST_ASSERT_FALSE(amostra_valida(-AMOSTRA_LIMITE_FISICO_MPS2 - 0.001f));
+    TEST_ASSERT_FALSE(amostra_valida(1000.0f));
+    /* Caso extremo 0x60000000 (~3,7e19) — rejeita. */
+    TEST_ASSERT_FALSE(amostra_valida(float_de_bits(0x60000000u)));
+    /* Não-finitos — rejeita. */
+    TEST_ASSERT_FALSE(amostra_valida(INFINITY));
+    TEST_ASSERT_FALSE(amostra_valida(-INFINITY));
+    TEST_ASSERT_FALSE(amostra_valida(NAN));
+}
+
+/* Glitch plausível (3 m/s² ≈ 0,3 g) numa senoide de baixa amplitude é
+ * detectado e substituído pela mediana local; a senoide limpa não é tocada. */
+static void test_hampel_remove_impulso_isolado(void)
+{
+    preencher_senoide(&j, EIXO_X, 0.5f, 25.0f, 0.0f, JANELA_N_AMOSTRAS);
+    const uint32_t ig = 250;
+    const float glitch = 3.0f;
+    j.amostras[ig][EIXO_X] = glitch;
+
+    const uint32_t n = janela_hampel(&j, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD);
+    TEST_ASSERT_GREATER_THAN(0, n);            /* substituiu ao menos o glitch */
+    TEST_ASSERT_NOT_EQUAL(glitch, j.amostras[ig][EIXO_X]);
+    TEST_ASSERT_FLOAT_WITHIN(0.6f, 0.0f, j.amostras[ig][EIXO_X]);
+}
+
+/* Senoide limpa não é danificada: RMS preservado dentro de 5%. */
+static void test_hampel_preserva_senoide_limpa(void)
+{
+    preencher_senoide(&j, EIXO_X, 0.5f, 25.0f, 0.0f, JANELA_N_AMOSTRAS);
+    metricas_t antes, depois;
+    analisar_janela(&j, 25.0f, &antes);
+    janela_t j2 = j;
+    const uint32_t n = janela_hampel(&j2, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD);
+    (void)n;
+    analisar_janela(&j2, 25.0f, &depois);
+    TEST_ASSERT_FLOAT_WITHIN(0.05f * antes.rms[EIXO_X], antes.rms[EIXO_X],
+                             depois.rms[EIXO_X]);
+}
+
+/* Eixo Z em repouso (gravidade ~9,81) com um glitch de +3 m/s²: removido e a
+ * gravidade fica intacta. */
+static void test_hampel_preserva_gravidade_com_glitch(void)
+{
+    preencher_senoide(&j, EIXO_Z, 0.0f, 0.0f, 9.80665f, JANELA_N_AMOSTRAS);
+    const uint32_t ig = 250;
+    j.amostras[ig][EIXO_Z] = 9.80665f + 3.0f;
+    const uint32_t n = janela_hampel(&j, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD);
+    TEST_ASSERT_GREATER_THAN(0, n);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, 9.80665f, j.amostras[ig][EIXO_Z]);
+    TEST_ASSERT_EQUAL_FLOAT(9.80665f, j.amostras[0][EIXO_Z]);
+    TEST_ASSERT_EQUAL_FLOAT(9.80665f, j.amostras[JANELA_N_AMOSTRAS - 1][EIXO_Z]);
+}
+
+/* Vibracao rica (f0 + harmonicos ate 5x, assinatura real de falha mista)
+ * NÃO e comida pelo Hampel: 0 substituicoes com t=5. Regressao do parametro
+ * (se alguem baixar o limiar, este teste quebra). */
+static void test_hampel_preserva_vibracao_com_harmonicos(void)
+{
+    /* f0 = 25 Hz + 2x..5x com amplitudes decrescentes (rms ~0.16, realista). */
+    j.n_amostras = JANELA_N_AMOSTRAS;
+    j.ts_primeira_us = 1000000;
+    j.ts_ultima_us = 1000000 + (uint64_t)((JANELA_N_AMOSTRAS - 1) * 1000000.0f / JANELA_FS_NOMINAL_HZ);
+    const float fs = JANELA_FS_NOMINAL_HZ;
+    const float f0 = 25.0f;
+    for (uint32_t i = 0; i < JANELA_N_AMOSTRAS; ++i) {
+        float t = (float)i / fs;
+        float v = 0.16f * (sinf(2.0f * PI * f0 * t)
+                         + 0.5f * sinf(2.0f * PI * 2 * f0 * t)
+                         + 0.25f * sinf(2.0f * PI * 3 * f0 * t)
+                         + 0.125f * sinf(2.0f * PI * 4 * f0 * t)
+                         + 0.0625f * sinf(2.0f * PI * 5 * f0 * t));
+        j.amostras[i][EIXO_X] = v;
+        j.amostras[i][EIXO_Y] = 0.0f;
+        j.amostras[i][EIXO_Z] = 0.0f;
+    }
+    const uint32_t n = janela_hampel(&j, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD);
+    TEST_ASSERT_LESS_THAN(3, n);  /* quase nada — nao come vibracao real */
+}
+
+/* Caso extremo 0x60000000 também é removido pelo Hampel (defesa em camada). */
+static void test_hampel_remove_0x60000000(void)
+{
+    preencher_senoide(&j, EIXO_X, 0.5f, 25.0f, 0.0f, JANELA_N_AMOSTRAS);
+    const uint32_t ig = 100;
+    const float extremo = float_de_bits(0x60000000u);
+    j.amostras[ig][EIXO_X] = extremo;
+    const uint32_t n = janela_hampel(&j, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD);
+    TEST_ASSERT_GREATER_THAN(0, n);
+    TEST_ASSERT_NOT_EQUAL(extremo, j.amostras[ig][EIXO_X]);
+    TEST_ASSERT_FLOAT_WITHIN(0.6f, 0.0f, j.amostras[ig][EIXO_X]);
+}
+
+/* Defensivos: NULL/k<=0/t<=0/n<3 → no-op (0 substituições). */
+static void test_hampel_defensivos(void)
+{
+    preencher_senoide(&j, EIXO_X, 0.5f, 25.0f, 0.0f, JANELA_N_AMOSTRAS);
+    TEST_ASSERT_EQUAL(0, janela_hampel(NULL, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD));
+    TEST_ASSERT_EQUAL(0, janela_hampel(&j, 0, HAMPEL_LIMIAR_MAD));
+    TEST_ASSERT_EQUAL(0, janela_hampel(&j, HAMPEL_K_VIZINHOS, 0.0f));
+    TEST_ASSERT_EQUAL(0, janela_hampel(&j, HAMPEL_K_VIZINHOS, -1.0f));
+    j.n_amostras = 2;
+    TEST_ASSERT_EQUAL(0, janela_hampel(&j, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD));
+}
+
 /* Registro dos testes — chamado pelos runners entre UNITY_BEGIN/UNITY_END. */
 void rodar_testes_signal_processing(void)
 {
@@ -461,4 +554,12 @@ void rodar_testes_signal_processing(void)
     /* Visão tabular (ticket 03) */
     RUN_TEST(test_metricas_para_vetor_mapeia_campos);
     RUN_TEST(test_metricas_para_vetor_defensivos);
+    /* Backstop RNF07 + filtro de Hampel (issue 5) */
+    RUN_TEST(test_amostra_valida_basico);
+    RUN_TEST(test_hampel_remove_impulso_isolado);
+    RUN_TEST(test_hampel_preserva_senoide_limpa);
+    RUN_TEST(test_hampel_preserva_gravidade_com_glitch);
+    RUN_TEST(test_hampel_preserva_vibracao_com_harmonicos);
+    RUN_TEST(test_hampel_remove_0x60000000);
+    RUN_TEST(test_hampel_defensivos);
 }

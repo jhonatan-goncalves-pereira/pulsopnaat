@@ -1,35 +1,26 @@
 /*
  * alert_manager — classificação 3σ/6σ, votação, pior eixo, máquina de
- * estados e sinalização (PulpoPNAAT, ticket 03).
+ * estados e sinalização (PulsoPNAAT, ticket 03).
  *
- * NÚCLEO PURO (este header e alert_manager.c): sem ESP-IDF, sem FreeRTOS,
- * sem I/O, sem estado global — os mesmos fontes compilam no alvo e no PC,
- * testáveis com sequências conhecidas (SPEC §Testing Decisions, seams 1 e 2).
+ * NÚCLEO PURO (este header e alert_manager.c): sem ESP-IDF, FreeRTOS, I/O
+ * ou estado global — compila no alvo e no PC (SPEC §Testing Decisions,
+ * seams 1 e 2). A face on-device vive em alerta_servico.c/h.
  *
  * Três camadas, todas funções puras:
  *
- *   1. Classificação por métrica (contra o baseline do componente baseline):
- *      valor > média + 3σ → ATENÇÃO;  valor > média + 6σ → CRÍTICA
- *      (estrito — "ultrapassar", RF04; crítica avaliada primeiro, pois é o
- *      pior estado). Baseline próximo de σ=0 colapsa os limiares à média
- *      (leitura literal dos limiares estatísticos — decisão registrada na
- *      SPEC); na prática σ saudável é > 0.
+ *   1. Classificação por métrica: valor > média + 3σ → ATENÇÃO;
+ *      > média + 6σ → CRÍTICA (estrito — "ultrapassar", RF04; crítica
+ *      avaliada primeiro). σ = 0 colapsa os limiares à média (leitura
+ *      literal — decisão na SPEC); na prática σ saudável é > 0.
  *
  *   2. Votação por eixo entre as METRICA_NUM métricas (RF04):
- *      VERDE: nenhuma métrica em alerta
- *      AMARELO: 1–2 métricas em atenção
- *      VERMELHO: 1 métrica crítica OU 3+ em atenção
- *      Estado do equipamento = PIOR estado entre os eixos (X, Y, Z) —
- *      uma falha uniaxial não é diluída (ISO 20816-3 por direção).
+ *      VERDE nenhuma em alerta; AMARELO 1–2 em atenção;
+ *      VERMELHO 1 crítica OU 3+ em atenção. Estado do equipamento = PIOR
+ *      eixo — falha uniaxial não é diluída (ISO 20816-3 por direção).
  *
- *   3. Máquina de estados (coordenador, SPEC):
- *        BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA
- *      `transitar(estado, evento) → estado'` é a função de transição pura;
+ *   3. Máquina de estados: BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA.
  *      MONITORANDO só é alcançado via EVENTO_BASELINE_DISPONIVEL (o nó
- *      nunca classifica sem baseline válido — RF09/user story 9).
- *
- * A face on-device (fila de eventos, task coordenadora, LED/buzzer físicos)
- * vive em alerta_servico.c/h, que consome este núcleo.
+ *      nunca classifica sem baseline — RF09/user story 9).
  */
 #pragma once
 
@@ -52,9 +43,8 @@ typedef enum {
 
 /*
  * Classifica UMA métrica de UM eixo contra o baseline. Estritamente maior
- * ("ultrapassar"). `baseline` NULL, métrica/eixo fora de faixa ou baseline
- * inválido → CLASSIF_NORMAL (defensivo: sem baseline válido não há alerta;
- * a máquina de estados garante que MONITORANDO só existe com baseline).
+ * ("ultrapassar"). `baseline` NULL, índices fora de faixa ou baseline
+ * inválido → CLASSIF_NORMAL (sem baseline válido não há alerta).
  */
 classificacao_t alerta_classificar_metrica(const baseline_t *baseline,
                                            metrica_id_t metrica, eixo_t eixo,
@@ -99,20 +89,11 @@ typedef enum {
 } evento_t;
 
 /*
- * Função de transição PURA (seam 2 da SPEC): `transitar(estado, evento) →
- * estado'`. Evento sem transição definida → estado inalterado (ignorado).
- *
- * Tabela (decisões registradas na SPEC §Decisões do ticket 03):
- *   BOOT        + INICIAR_CALIBRACAO   → CALIBRANDO
- *   BOOT        + BASELINE_DISPONIVEL  → MONITORANDO  (NVS do boot)
- *   CALIBRANDO  + BASELINE_DISPONIVEL  → MONITORANDO
- *   MONITORANDO + WIFI_CAIR            → CONTINGENCIA
- *   MONITORANDO + INICIAR_CALIBRACAO   → CALIBRANDO   (recalibração)
- *   CONTINGENCIA+ WIFI_RESTAURADO      → MONITORANDO
- * Ignorados (estado permanece): WIFI_* em BOOT/CALIBRANDO (a coleta de
- * baseline é local, não é interrompida por rede); INICIAR_CALIBRACAO em
- * CALIBRANDO (já em curso) e em CONTINGENCIA (o diagrama da SPEC entra em
- * CALIBRANDO apenas por BOOT/MONITORANDO); BASELINE_DISPONIVEL repetido.
+ * Função de transição PURA (seam 2 da SPEC): sem transição definida →
+ * estado inalterado. Ignorados: WIFI_* em BOOT/CALIBRANDO (coleta é local,
+ * não interrompida por rede); INICIAR_CALIBRACAO em CALIBRANDO (já em
+ * curso) e em CONTINGENCIA (entra em CALIBRANDO só por BOOT/MONITORANDO);
+ * BASELINE_DISPONIVEL repetido. Decisões na SPEC §ticket 03.
  */
 estado_maquina_t transitar(estado_maquina_t estado, evento_t evento);
 
@@ -137,9 +118,9 @@ typedef struct {
 /*
  * Mapeia (estado da máquina, estado do equipamento) → sinalização.
  * CALIBRANDO nunca aciona o buzzer (sem classificação durante a coleta);
- * CONTINGENCIA indica "sem conectividade" e mantém o buzzer SOMENTE se o
- * equipamento segue em vermelho (SPEC §Máquina de estados). `sinal` NULL →
- * no-op; estado inválido → LED apagado.
+ * CONTINGENCIA mantém o buzzer SOMENTE se o equipamento segue em vermelho
+ * (SPEC §Máquina de estados). `sinal` NULL → no-op; estado inválido → LED
+ * apagado.
  */
 void alerta_sinalizar(estado_maquina_t estado_maquina,
                       estado_equipamento_t estado_equipamento,

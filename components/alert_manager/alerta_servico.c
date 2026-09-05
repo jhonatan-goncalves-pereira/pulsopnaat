@@ -3,19 +3,16 @@
  *
  * Task coordenadora: consome a fila de eventos (timeout = tick de LED) e,
  * a cada iteração, re-renderiza a sinalização a partir do estado corrente:
- *
- *   evento → s = transitar(s, evento)   [só a task aqui escreve s]
+ *   evento → s = transitar(s, evento)   [só esta task escreve s]
  *   tick   → alerta_sinalizar(s, estado_equip) → LED (padrão/blink) + buzzer
  *
- * Padrões de LED (tick de 100 ms) — LED RGB EXTERNO de 3 canais discretos
- * (um GPIO por cor, nível configurável; cores misturadas fisicamente):
+ * Padrões de LED (tick de 100 ms) — LED RGB EXTERNO, 3 canais discretos:
  *   NORMAL      verde (G)
  *   ATENCAO     amarelo (R+G) piscando (~1,7 Hz)
  *   CRITICO     vermelho (R) fixo + buzzer
- *   CALIBRANDO  azul (B) piscando rápido (5 Hz) — "não perturbe o equipamento"
+ *   CALIBRANDO  azul (B) piscando rápido (5 Hz) — "não perturbe"
  *   SEM_CONEXAO branco (R+G+B) piscando (1 Hz)
  *   OFF         apagado (BOOT)
- * Buzzer é nível puro (on/off); polaridade via Kconfig.
  */
 #include "alerta_servico.h"
 
@@ -144,9 +141,7 @@ static void tarefa_coordenadora(void *arg)
     evento_t evento;
 
     for (;;) {
-        /* Eventos podem chegar a qualquer momento; entre eles, o loop serve
-         * de tick de renderização (100 ms de resolução é suficiente para os
-         * padrões piscantes). */
+        /* Entre eventos, o loop serve de tick de renderização (100 ms). */
         if (xQueueReceive(s_fila_eventos, &evento,
                           pdMS_TO_TICKS(TICK_LED_MS)) == pdTRUE) {
             const estado_maquina_t antes =
@@ -206,7 +201,7 @@ esp_err_t alerta_servico_iniciar(void)
     }
 
     /* LED RGB externo: um GPIO de saída por canal (falha aqui só custa a
-     * indicação visual — o canal problemático é desativado com log). */
+     * indicação — o canal problemático é desativado com log). */
     for (int canal = 0; canal < NUM_CANAIS_LED; ++canal) {
         const int gpio = s_canal_gpio[canal];
         if (gpio < 0) {

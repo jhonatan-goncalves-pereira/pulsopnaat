@@ -1,45 +1,11 @@
 /*
- * Testes Unity do componente alert_manager — corpus executado ON-TARGET
- * (app de teste `test_app`), mesmo padrão dos demais test_*.c:
- *
- *   idf.py -C test_app build flash monitor
- *   → resumo Unity no serial (N Tests, 0 Failures, OK)
+ * Testes Unity do alert_manager — corpus executado ON-TARGET (test_app),
+ * mesmo padrão dos demais test_*.c:
+ *   idf.py -C test_app build flash monitor → "N Tests, 0 Failures, OK"
  *
  * Cobre o núcleo PURO (seams 1 e 2 da SPEC — classificação e máquina de
- * estados); a face on-device (alerta_servico: fila, LED, buzzer) é integração
- * validada por observação no dispositivo.
- *
- * Classificação 3σ/6σ (baseline sintético: média 10, σ 2 → atenção > 16,
- * crítica > 22):
- *     1. valor no/nos limiares exatos → normal (estrito: "ultrapassar").
- *     2. logo acima de 3σ → atenção; logo acima de 6σ → crítica.
- *     3. entre 3σ e 6σ → atenção; abaixo → normal.
- *     4. σ = 0 → limiares colapsam na média (leitura literal; acima da
- *        média já é crítica — crítica avaliada antes).
- *     5. Defensivos: baseline NULL/inválido, métrica/eixo fora de faixa.
- *   Votação por eixo (6 métricas):
- *     6. 0 alertas → verde; 1–2 atenções → amarelo; 3+ atenções → vermelho.
- *     7. 1 crítica (resto normal) → vermelho; crítica+atenções → vermelho.
- *     8. Eixos independentes: alerta em Y não vaza para X/Z.
- *   Pior eixo:
- *     9. X verde, Y amarelo, Z verde → amarelo; qualquer vermelho → vermelho.
- *    10. Todos verde → verde (equipamento saudável).
- *   Máquina de estados (transitar — sequências da SPEC):
- *    11. BOOT→CALIBRANDO (comando); BOOT→MONITORANDO (baseline da NVS).
- *    12. CALIBRANDO→MONITORANDO (baseline pronto); WIFI_* ignorados na
- *        calibração; comando repetido ignorado.
- *    13. MONITORANDO⇄CONTINGENCIA (WIFI_CAIR/WIFI_RESTAURADO).
- *    14. Recalibração: MONITORANDO+comando→CALIBRANDO; comando ignorado em
- *        CONTINGENCIA.
- *    15. Sequência canônica completa BOOT→CALIBRANDO→MONITORANDO→
- *        CONTINGENCIA→MONITORANDO.
- *    16. Eventos redundantes são idempotentes (estado não oscila).
- *   Sinalização:
- *    17. BOOT → LED off; CALIBRANDO → calibrando, buzzer SEMPRE off.
- *    18. MONITORANDO: verde→normal, amarelo→atenção (buzzer off),
- *        vermelho→crítico + buzzer ON (RF06).
- *    19. CONTINGENCIA: sem conexão; buzzer só se vermelho.
- *    20. Defensivo: sinal NULL → no-op.
+ * estados); a face on-device (alerta_servico) é integração validada por
+ * observação no dispositivo. Índice dos casos: lista de RUN_TEST no fim.
  */
 #include "unity.h"
 
@@ -57,7 +23,7 @@ static baseline_t base;
 static metricas_t m;
 
 /* setUp()/tearDown() NÃO são definidos aqui — vivem em único arquivo no
- * runner (hoje test_signal_processing.c); cada teste chama preparar(). */
+ * runner; cada teste chama preparar(). */
 static void preparar(void)
 {
     for (int i = 0; i < METRICA_NUM; ++i) {

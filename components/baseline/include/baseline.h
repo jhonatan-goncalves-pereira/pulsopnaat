@@ -2,23 +2,17 @@
  * baseline — modo de calibração e estatísticas do regime saudável
  * (PulsoPNAAT, ticket 03).
  *
- * O baseline é o perfil de vibração do equipamento EM OPERAÇÃO SAUDÁVEL:
- * para cada métrica (RMS, 1x, 2x, banda 3x–5x, kurtosis, THD) e cada eixo
- * (X, Y, Z), a média e o desvio-padrão amostrados sobre 30 janelas de 1 s.
- * Os limiares de classificação (alert_manager) são estatísticos sobre este
- * perfil — média + 3σ (atenção) e média + 6σ (crítico) — e não
- * multiplicativos, tornando-se robustos mesmo quando a referência saudável
- * é próxima de zero (requisitos v2.1, RF08/decisões de projeto).
+ * Perfil de vibração EM OPERAÇÃO SAUDÁVEL: média e σ por métrica (RMS, 1x,
+ * 2x, banda 3x–5x, kurtosis, THD) e por eixo (X, Y, Z) sobre 30 janelas de
+ * 1 s. Limiares de classificação são ESTATÍSTICOS sobre este perfil —
+ * média + 3σ (atenção) e média + 6σ (crítico), não multiplicativos —
+ * robustos quando a referência saudável é próxima de zero (RF08).
  *
- * Disparo: SEMPRE comandado (botão físico ou comando serial) quando o
- * operador confirma o motor em regime saudável — nunca automático no boot
- * (os primeiros segundos raramente correspondem a regime estável).
+ * Disparo: SEMPRE comandado (botão/serial) com o motor em regime saudável —
+ * nunca automático no boot.
  *
- * Pureza: o núcleo deste componente (acumulador, extração, validação e
- * serialização do registro) não depende de ESP-IDF, I/O ou alocação — os
- * mesmos fontes compilam no alvo e no PC, testáveis com valores conhecidos.
- * A persistência em NVS vive isolada em baseline_nvs.c/h (camada fina de
- * I/O sobre o registro empacotado, que é puro e testável).
+ * Núcleo puro (acumulador, extração, validação e serialização): sem
+ * ESP-IDF, I/O ou alocação. Persistência NVS isolada em baseline_nvs.c/h.
  */
 #pragma once
 
@@ -36,9 +30,9 @@ extern "C" {
 #define BASELINE_N_JANELAS 30
 
 /*
- * Baseline calibrado: média e desvio-padrão (σ POPULACIONAL, divisão por n
- * — convenção coerente com a kurtosis do signal_processing) por métrica e
- * por eixo. Índices na ordem de `metrica_id_t` × `eixo_t`.
+ * Baseline calibrado: média e σ POPULACIONAL (÷ n — coerente com a kurtosis
+ * do signal_processing) por métrica e eixo, índices na ordem de
+ * `metrica_id_t` × `eixo_t`.
  */
 typedef struct {
     float media[METRICA_NUM][JANELA_NUM_EIXOS];
@@ -46,10 +40,9 @@ typedef struct {
 } baseline_t;
 
 /*
- * Acumulador da calibração — recebe as métricas das janelas saudáveis, uma
- * a uma, e mantém média/variância incrementais (algoritmo de Welford:
- * estável numericamente, uma passada, sem armazenar as 30 janelas).
- * Usado pela task de processamento enquanto a máquina está em CALIBRANDO.
+ * Acumulador da calibração — média/variância incrementais (Welford:
+ * estável, uma passada, sem armazenar as 30 janelas). Usado pela task de
+ * processamento enquanto a máquina está em CALIBRANDO.
  */
 typedef struct {
     uint32_t n; /* janelas já acumuladas (≤ BASELINE_N_JANELAS) */
@@ -63,7 +56,7 @@ void baseline_calibracao_iniciar(baseline_calibracao_t *cal);
 /*
  * Acrescenta as métricas de UMA janela ao acumulador. Retorna true quando a
  * coleta atinge BASELINE_N_JANELAS (e em toda chamada subsequente); janelas
- * além da 30ª são ignoradas. `cal` ou `metricas` NULL → false (não conta).
+ * excedentes são ignoradas. `cal`/`metricas` NULL → false.
  */
 bool baseline_calibracao_adicionar(baseline_calibracao_t *cal,
                                    const metricas_t *metricas);
@@ -80,9 +73,8 @@ bool baseline_calibracao_extrair(const baseline_calibracao_t *cal,
                                  baseline_t *out);
 
 /*
- * Baseline utilizável? Todos os valores finitos (não-NaN/inf) e σ ≥ 0.
- * Usado antes de entrar em MONITORANDO (aí sim, "baseline válido existe").
- * NULL → false.
+ * Baseline utilizável? Valores finitos e σ ≥ 0. Usado antes de entrar em
+ * MONITORANDO. NULL → false.
  */
 bool baseline_valido(const baseline_t *b);
 

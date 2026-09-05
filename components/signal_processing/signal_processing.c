@@ -1,25 +1,19 @@
 /*
  * signal_processing — implementação (ver signal_processing.h).
  *
- * Cadeia espectral por janela e por eixo (ticket 02):
+ * Cadeia por janela e eixo: amostras (n ≤ 500) → Hann simétrica →
+ * zero-padding p/ 512 → FFT radix-2 (dsps_fft2r_fc32 + bit-reverse).
  *
- *   amostras do eixo (n ≤ 500)
- *     → janela de Hann (dsps_wind_hann_f32, simétrica — w[0]=w[n−1]=0)
- *     → zero-padding para 512 (parte imaginária = 0)
- *     → FFT complexa radix-2 do esp-dsp (dsps_fft2r_fc32 + bit-reverse)
- *     → bins 0..256 contêm o espectro do sinal real (metade superior é o
- *       espelho Hermitiano — por isso NÃO se usa dsps_cplx2reC_fc32, que é
- *       o truque para DUAS reais numa FFT e dobraria os bins aqui)
- *     → amplitude física no bin = 2·|X[k]|/Σw (Σw = soma da janela aplicada,
- *       embutindo o ganho coerente da Hann — exato para tom em bin alinhado,
- *       qualquer que seja n)
- *     → harmônicos 1x..5x no bin MAIS PRÓXIMO de k·f0 (SPEC: "magnitude
- *       espectral no bin correspondente"); banda 3x–5x = máximo em
- *       [3·f0, 5·f0]; THD sobre 1x–5x; kurtosis direto nas amostras.
+ * Gotchas:
+ *   - Bins 0..256 trazem o espectro real (metade superior é espelho
+ *     Hermitiano) — NÃO usar dsps_cplx2reC_fc32 (truque para DUAS reais).
+ *   - Amplitude física no bin = 2·|X[k]|/Σw (Σw embute o ganho coerente da
+ *     Hann — exato para tom em bin alinhado, qualquer n).
+ *   - Harmônicos 1x..5x no bin MAIS PRÓXIMO de k·f0; banda 3x–5x = máximo
+ *     em [3f0, 5f0]; THD sobre 1x–5x; kurtosis direto nas amostras.
  *
- * Sem ESP-IDF core, sem FreeRTOS, sem I/O, sem alocação: os buffers abaixo
- * são rascunho estático (single-consumer, não reentrante) e a única
- * dependência é o esp-dsp — biblioteca de cálculo puro.
+ * Buffers de rascunho estáticos (single-consumer, não reentrante); única
+ * dependência é o esp-dsp, biblioteca de cálculo puro.
  */
 #include "signal_processing.h"
 
@@ -33,24 +27,21 @@
 
 /* A visão tabular [métrica][eixo] de metricas_t pressupõe que a struct é
  * exatamente METRICA_NUM arrays de JANELA_NUM_EIXOS floats (header documenta
- * a correspondência com metrica_id_t). Se alguém acrescentar uma métrica sem
- * atualizar o enum (ou vice-versa), o build quebra aqui — não na bancada. */
+ * a correspondência). Se enum e struct divergirem, quebra aqui — não na
+ * bancada. */
 _Static_assert(sizeof(metricas_t) ==
                    (size_t)METRICA_NUM * JANELA_NUM_EIXOS * sizeof(float),
                "metricas_t deve ter METRICA_NUM x JANELA_NUM_EIXOS floats");
 
-/* Buffers de rascunho — alinhados a 16 bytes como os exemplos oficiais do
- * esp-dsp (caminho SIMD aes3/ae32 da FFT). Não reentrante por design: uma
- * única task de processamento consome as janelas (SPEC §Arquitetura). */
+/* Buffers de rascunho — alinhados a 16 bytes (caminho SIMD do esp-dsp).
+ * Não reentrante por design: uma única task consome as janelas. */
 static _Alignas(16) float s_hann[JANELA_N_AMOSTRAS];
 static _Alignas(16) float s_fft[2 * ANALISE_FFT_N]; /* intercalado Re,Im */
 
 void signal_processing_init(void)
 {
-    /* Padrão dos exemplos oficiais do esp-dsp: tabela de twiddle cobrindo
-     * CONFIG_DSP_MAX_FFT_SIZE (default 4096 ≥ 512), alocada internamente.
-     * Idempotente (dsps_fft2r_initialized). Se falhar (heap), aborta no
-     * boot — coerente com o estilo ESP_ERROR_CHECK do app_main. */
+    /* Tabela de twiddle cobrindo CONFIG_DSP_MAX_FFT_SIZE (≥ 512), alocada
+     * internamente; idempotente. Falha (heap) aborta no boot. */
     ESP_ERROR_CHECK(dsps_fft2r_init_fc32(NULL, CONFIG_DSP_MAX_FFT_SIZE));
 }
 
@@ -91,6 +82,101 @@ float calcular_rms_passo(const float *amostras, size_t n_amostras, size_t passo)
 float calcular_rms(const float *amostras, size_t n_amostras)
 {
     return calcular_rms_passo(amostras, n_amostras, 1);
+}
+
+/* ---- Backstop físico RNF07 + filtro de Hampel (despike) ---- */
+
+bool amostra_valida(float a_mps2)
+{
+    return isfinite(a_mps2) && fabsf(a_mps2) <= AMOSTRA_LIMITE_FISICO_MPS2;
+}
+
+/* Mediana de um vetor pequeno (≤ 2k+1 amostras) por insertion-sort in-place
+ * num buffer temporário — sem alocação. Pura. */
+static float mediana_janela(const float *vals, int n)
+{
+    if (n <= 0) {
+        return 0.0f;
+    }
+    float tmp[2 * HAMPEL_K_VIZINHOS + 1];
+    if (n > (int)(sizeof(tmp) / sizeof(tmp[0]))) {
+        n = (int)(sizeof(tmp) / sizeof(tmp[0]));
+    }
+    for (int i = 0; i < n; ++i) {
+        tmp[i] = vals[i];
+    }
+    /* insertion sort */
+    for (int i = 1; i < n; ++i) {
+        const float v = tmp[i];
+        int j = i - 1;
+        while (j >= 0 && tmp[j] > v) {
+            tmp[j + 1] = tmp[j];
+            --j;
+        }
+        tmp[j + 1] = v;
+    }
+    return tmp[n / 2];
+}
+
+uint32_t janela_hampel(janela_t *janela, int k, float t)
+{
+    if (janela == NULL || k <= 0 || t <= 0.0f) {
+        return 0;
+    }
+    if (k > HAMPEL_K_VIZINHOS) {
+        k = HAMPEL_K_VIZINHOS;  /*Limita ao buffer de mediana. */
+    }
+
+    int n = (int)janela->n_amostras;
+    if (n > (int)JANELA_N_AMOSTRAS) {
+        n = (int)JANELA_N_AMOSTRAS;
+    }
+    if (n < 3) {
+        return 0;  /* janela degenerada — não há o que limpar. */
+    }
+
+    uint32_t substituidas = 0;
+    float vizinhos[2 * HAMPEL_K_VIZINHOS + 1];
+
+    for (int eixo = 0; eixo < JANELA_NUM_EIXOS; ++eixo) {
+        for (int i = 0; i < n; ++i) {
+            int lo = i - k;
+            int hi = i + k;
+            if (lo < 0) {
+                lo = 0;
+            }
+            if (hi > n - 1) {
+                hi = n - 1;
+            }
+
+            int nv = 0;
+            for (int j = lo; j <= hi; ++j) {
+                vizinhos[nv++] = janela->amostras[j][eixo];
+            }
+            const float m = mediana_janela(vizinhos, nv);
+
+            /* MAD = mediana dos |x−m|. Reusa o mesmo buffer. */
+            for (int j = 0; j < nv; ++j) {
+                vizinhos[j] = fabsf(vizinhos[j] - m);
+            }
+            const float mad = mediana_janela(vizinhos, nv);
+
+            const float x = janela->amostras[i][eixo];
+            /* Substitui se destoa mais que t·MAD. mad==0 (vizinhança
+             * constante) só substitui se x também difere de m (impulso
+             * isolado numa vizinhança plana). */
+            if (mad > 0.0f) {
+                if (fabsf(x - m) > t * mad) {
+                    janela->amostras[i][eixo] = m;
+                    ++substituidas;
+                }
+            } else if (x != m) {
+                janela->amostras[i][eixo] = m;
+                ++substituidas;
+            }
+        }
+    }
+    return substituidas;
 }
 
 float calcular_kurtosis(const float *amostras, size_t n_amostras)

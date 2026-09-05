@@ -1,10 +1,9 @@
 /*
  * alert_manager — implementação do núcleo puro (ver alert_manager.h).
  *
- * Nada aqui depende de ESP-IDF/FreeRTOS: classificação, votação, pior eixo,
- * transição de estados e mapeamento de sinalização são funções puras sobre
- * os tipos de signal_processing/baseline — o corpus de testes exercita
- * exatamente estas funções on-target via test_app.
+ * Nada depende de ESP-IDF/FreeRTOS: classificação, votação, pior eixo,
+ * transição e sinalização lógica são funções puras sobre signal_processing/
+ * baseline — exercitadas on-target via test_app.
  */
 #include "alert_manager.h"
 
@@ -79,10 +78,9 @@ estado_equipamento_t alerta_classificar_eixo(const baseline_t *baseline,
         }
     }
 
-    /* Votação entre as métricas (RF04): vermelho com 1 crítica OU 3+ em
-     * atenção; amarelo com 1–2 em atenção; verde com nenhuma em alerta.
-     * A votação dilui falsos positivos de uma métrica isolada, mas 3
-     * métricas convergindo em atenção já é padrão de falha (não ruído). */
+    /* Votação (RF04): vermelho com 1 crítica OU 3+ em atenção; amarelo com
+     * 1–2 em atenção. A votação dilui falsos positivos de uma métrica
+     * isolada, mas 3 convergindo já é padrão de falha (não ruído). */
     if (n_critica >= 1 || n_atencao >= 3) {
         return ESTADO_EQUIP_VERMELHO;
     }

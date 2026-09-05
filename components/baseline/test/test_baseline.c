@@ -1,30 +1,14 @@
 /*
- * Testes Unity do componente baseline — corpus executado ON-TARGET
- * (app de teste `test_app`), mesmo padrão de test_signal_processing.c:
+ * Testes Unity do baseline — corpus executado ON-TARGET (test_app), mesmo
+ * padrão de test_signal_processing.c:
+ *   idf.py -C test_app build flash monitor → "N Tests, 0 Failures, OK"
  *
- *   idf.py -C test_app build flash monitor
- *   → resumo Unity no serial (N Tests, 0 Failures, OK)
+ * Componente PURO (sem ESP-IDF/I/O): cobre a lógica (Welford, validação,
+ * serialização); a NVS é camada fina validada on-device na integração.
+ * Índice dos casos: lista de RUN_TEST no fim.
  *
- * Componente PURO (sem ESP-IDF/I/O): a persistência NVS é camada fina
- * (baseline_nvs.c) validada on-device na integração; aqui cobre-se a lógica:
- *
- *   Calibração (acumulador Welford):
- *     1. 30 janelas idênticas → média = valor, σ = 0.
- *     2. 30 janelas alternando {a,b} 15×15 → média = (a+b)/2, σ = |a−b|/2.
- *     3. Coleta parcial (< 30) → extrair falha; completa → extrair ok.
- *     4. Janelas além da 30ª ignoradas (n não passa de 30).
- *     5. Defensivos: NULL em iniciar/adicionar/completa/extrair.
- *     6. Isolamento por eixo/métrica (só a célula alimentada muda).
- *   Validação:
- *     7. baseline_valido: NaN → false; σ negativo → false; ok → true.
- *   Serialização (registro NVS):
- *     8. Roundtrip empacotar→desempacotar preserva o baseline.
- *     9. Byte corrompido → desempacotar false (CRC).
- *    10. Mágica/versão erradas → false.
- *    11. Campos com NaN dentro do registro → false (baseline_valido).
- *
- * Valores exatos escolhidos para não depender de tolerância: médias e σ
- * exatos em float ({2,4} → média 3, σ 1; 15+15 mantém exatidão binária).
+ * Valores exatos escolhidos para não depender de tolerância ({2,4} → média
+ * 3, σ 1; 15+15 mantém exatidão binária).
  */
 #include "unity.h"
 
@@ -33,10 +17,9 @@
 #include <math.h>
 #include <string.h>
 
-/* Acumulador e baseline FORA da pilha (estruturas ~300/150 bytes caberiam,
- * mas seguem o padrão dos demais testes: estáticos, reescritos a cada uso).
- * setUp()/tearDown() NÃO são definidos aqui — vivem em único arquivo no
- * runner (hoje test_signal_processing.c); cada teste chama reiniciar(). */
+/* Acumulador e baseline FORA da pilha (padrão dos demais testes: estáticos,
+ * reescritos a cada uso). setUp()/tearDown() NÃO são definidos aqui — vivem
+ * em único arquivo no runner; cada teste chama reiniciar(). */
 static baseline_calibracao_t cal;
 static baseline_t b;
 

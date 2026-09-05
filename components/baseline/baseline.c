@@ -1,19 +1,19 @@
 /*
  * baseline — núcleo puro (ver baseline.h).
  *
- * Calibração: média e σ incrementais por (métrica, eixo) via Welford —
- * uma passada, acumulação em double, sem guardar as janelas:
+ * Calibração por Welford (média e σ incrementais por métrica/eixo, uma
+ * passada, acumulação em double, sem guardar janelas):
  *
  *   n ← n + 1
- *   δ   = x − media
+ *   δ     = x − media
  *   media += δ / n
- *   M2    += δ · (x − media)          (M2 = Σ(x−média)²)
+ *   M2    += δ · (x − media)        (M2 = Σ(x−média)²)
  *
- * ao completar 30 janelas: σ = √(M2/n) (populacional, ÷ n — coerente com
- * os momentos viesados da kurtosis do signal_processing).
+ * ao completar 30 janelas: σ = √(M2/n) (populacional — coerente com os
+ * momentos viesados da kurtosis do signal_processing).
  *
- * Registro de persistência: mágica + versão + floats + CRC32, tudo aqui
- * (puro); a NVS apenas carrega/grava os bytes (baseline_nvs.c).
+ * Registro de persistência (mágica + versão + floats + CRC32) é serializado
+ * aqui (puro); a NVS só carrega/grava os bytes (baseline_nvs.c).
  */
 #include "baseline.h"
 

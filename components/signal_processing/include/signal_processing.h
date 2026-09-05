@@ -1,48 +1,38 @@
 /*
  * signal_processing — matemática de sinais por janela, por eixo (PulsoPNAAT).
  *
- * Componente determinístico e testável isoladamente do hardware: sem
- * FreeRTOS, sem I/O, sem alocação e sem estado mutável — os mesmos fontes
- * compilam no alvo e no PC, o que permite testar a matemática do pipeline
- * com entradas sintéticas e saídas esperadas conhecidas (validação on-target
- * via test_app). A única dependência externa é o esp-dsp (FFT de Hann), uma
- * biblioteca de CÁLCULO puro otimizada para o ESP32-S3 — não toca hardware
- * nem SO; suas tabelas são constantes inicializadas por
- * `signal_processing_init()` no boot.
+ * Componente PURO: sem FreeRTOS, I/O, alocação ou estado mutável — os mesmos
+ * fontes compilam no alvo e no PC (validação on-target via test_app). Única
+ * dependência é o esp-dsp (cálculo puro; tabelas criadas por
+ * `signal_processing_init()` no boot).
  *
  * Cadeia de métricas por eixo, a cada janela de 1 s:
- *   RMS → nível geral de vibração (m/s²)
- *   Amplitude harmônica 1x (= f0) e 2x (= 2·f0) → desbalanceamento,
- *       desalinhamento (via FFT com janela de Hann)
- *   Banda 3x–5x (amplitude máxima em [3·f0, 5·f0]) → folga mecânica
+ *   RMS                        → nível geral de vibração (m/s²)
+ *   Harmônicos 1x e 2x (f0, 2f0) → desbalanceamento, desalinhamento
+ *   Banda 3x–5x (máx em [3f0, 5f0]) → folga mecânica
  *   Kurtosis (excesso de Fisher) → impulsividade no domínio do tempo
- *   THD (sobre harmônicos 1x–5x) → degradação espectral geral
+ *   THD (harmônicos 1x–5x)     → degradação espectral geral
  *
- * f0 = RPM_nominal/60 vem da configuração de boot (Kconfig) e é passado como
- * parâmetro — a função permanece pura, sem ler configuração nem relógio.
+ * f0 = RPM_nominal/60 vem da config de boot e é passado como parâmetro —
+ * a função permanece pura, sem ler configuração nem relógio.
  */
 #pragma once
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/*
- * fs = 500 Hz (taxa nativa do ACCELEROMETER do BNO085, confirmada no log de
- * taxa efetiva) com janela de 1 s → N = 500 amostras por eixo, 3 eixos.
- */
+/* fs = 500 Hz (taxa nativa do ACCELEROMETER do BNO085) × janela de 1 s. */
 #define JANELA_N_AMOSTRAS 500
 #define JANELA_NUM_EIXOS  3
 #define JANELA_FS_NOMINAL_HZ 500.0f
 
-/*
- * FFT: as n amostras da janela (com Hann) recebem zero-padding para 512
- * pontos (potência de 2 exigida pelo esp-dsp). Com fs = 500 Hz, resolução de
- * bin = 500/512 ≈ 0,98 Hz e Nyquist = 250 Hz (requisitos v2.1, RF03).
- */
+/* Amostras da janela (Hann + zero-padding para 512): resolução ≈ 0,98 Hz,
+ * Nyquist = 250 Hz (RF03). */
 #define ANALISE_FFT_N 512
 
 /* Harmônicos 1x–5x usados no THD. */
@@ -56,13 +46,9 @@ typedef enum {
 
 /*
  * Janela triaxial de aceleração em m/s², produzida por `vibration_sensor`.
- *
- * `amostras[i][eixo]` — i-ésima amostra da janela, eixo 0=X, 1=Y, 2=Z.
- * `ts_primeira_us` / `ts_ultima_us` — timestamps SH-2 (µs) da primeira e da
- * última amostra; baseiam-se no tempo do sensor (base timestamp + delay por
- * reporte), servindo para medir a taxa efetiva de amostragem.
- * `n_amostras` — amostras efetivamente acumuladas (esperado: JANELA_N_AMOSTRAS;
- * pode ser menor se a robustez futura descartar amostras inválidas).
+ * `ts_primeira_us`/`ts_ultima_us`: timestamps SH-2 (µs) usados para medir a
+ * taxa efetiva de amostragem. `n_amostras`: acumuladas de fato (esperado:
+ * JANELA_N_AMOSTRAS).
  */
 typedef struct {
     float amostras[JANELA_N_AMOSTRAS][JANELA_NUM_EIXOS];
@@ -71,15 +57,10 @@ typedef struct {
     uint64_t ts_ultima_us;
 } janela_t;
 
-/*
- * Métricas calculadas para uma janela, independentemente por eixo.
- *
- * `rms`, `harmonica_1x`, `harmonica_2x` e `banda_3x_5x` em m/s² (amplitudes
- * físicas, normalizadas pelo ganho coerente da janela de Hann aplicada);
- * `kurtosis` e `thd` adimensionais.
- */
+/* Métricas de uma janela, por eixo. rms/harmonicas/banda em m/s² (normalizadas
+ * pelo ganho coerente da Hann); kurtosis/thd adimensionais. */
 typedef struct {
-    /* RMS = √(média(x²)) — inclui DC (gravidade em repouso ≈ 9,81 m/s²). */
+    /* RMS = √(média(x²)) — inclui DC (gravidade ≈ 9,81 m/s² em repouso). */
     float rms[JANELA_NUM_EIXOS];
     /* Amplitude espectral no bin mais próximo de f0 (1x) e de 2·f0 (2x). */
     float harmonica_1x[JANELA_NUM_EIXOS];
@@ -87,28 +68,21 @@ typedef struct {
     /* Amplitude máxima na banda [3·f0, 5·f0]. */
     float banda_3x_5x[JANELA_NUM_EIXOS];
     /*
-     * Kurtosis amostral de Fisher (excesso): m4/m2² − 3 com momentos
-     * centrais viesados (divisão por n). Gaussiana → 0; senoide pura → −1,5;
-     * impulsiva → positivo e alto. Sinal constante (variância 0) → 0.
+     * Excesso de Fisher: m4/m2² − 3 (momentos viesados, ÷ n).
+     * Gaussiana → 0; senoide pura → −1,5; impulsiva → alto; sinal
+     * constante → 0.
      */
     float kurtosis[JANELA_NUM_EIXOS];
     /*
-     * THD = √(V₂² + V₃² + V₄² + V₅²) / V₁ sobre os harmônicos 1x–5x.
-     * Definido como 0 quando a fundamental não se destaca do ruído
-     * (V₁ ≤ 10⁻³·RMS) — sem a guarda, janelas sem 1x produzem THD
-     * explosivo (razão entre dois vazamentos de FFT), inútil para a
-     * classificação futura por baseline.
+     * THD = √(V₂²+…+V₅²)/V₁. Definido como 0 quando a fundamental não se
+     * destaca do ruído (V₁ ≤ 10⁻³·RMS) — sem a guarda, janelas sem 1x
+     * produzem razão entre vazamentos de FFT, inútil para a classificação.
      */
     float thd[JANELA_NUM_EIXOS];
 } metricas_t;
 
-/*
- * Identificador das métricas de `metricas_t` — visão tabular
- * [métrica][eixo] usada pelo baseline (média/σ por métrica e por eixo) e
- * pela classificação 3σ/6σ do alert_manager. A ordem DEVE espelhar os
- * campos da struct (garantido por _Static_assert na implementação de
- * `metricas_para_vetor`).
- */
+/* Identificador tabular [métrica][eixo] usado por baseline e alert_manager.
+ * A ordem DEVE espelhar os campos da struct (garantido por _Static_assert). */
 typedef enum {
     METRICA_RMS = 0,
     METRICA_HARMONICA_1X,
@@ -119,69 +93,67 @@ typedef enum {
     METRICA_NUM
 } metrica_id_t;
 
-/*
- * Inicialização do componente — chamar UMA VEZ no boot (app_main ou runner
- * de testes) antes de qualquer `analisar_janela`. Idempotente: constrói as
- * tabelas de twiddle do esp-dsp (dsps_fft2r_init_fc32, padrão dos exemplos
- * oficiais). Sem a inicialização, a FFT retorna erro e as métricas
- * espectrais saem zeradas (RMS e kurtosis continuam válidas).
- */
+/* Chamar UMA VEZ no boot antes de qualquer `analisar_janela` (idempotente).
+ * Sem init, a FFT retorna erro e as métricas espectrais saem zeradas. */
 void signal_processing_init(void);
 
 /*
- * Função de análise da janela — PURA e testável no host/alvo.
+ * Análise completa da janela — PURA. Não reentrante: usa buffers de rascunho
+ * estáticos (consumo por uma única task de processamento, SPEC).
  *
- * Toda a matemática do pipeline (RMS, Hann + FFT + harmônicos, kurtosis,
- * THD e, nas próximas fases, classificação contra o baseline) vive aqui,
- * para que seja verificável isoladamente do hardware. Sem alocação, I/O ou
- * estado mutável. NÃO reentrante: usa buffers de rascunho estáticos
- * (totalmente reescritos a cada chamada) — consumo por uma única task de
- * processamento, conforme a arquitetura da SPEC.
- *
- * `f0_hz` — frequência fundamental de rotação = RPM_nominal/60 (config de
- * boot). O mapeamento de bins usa a fs EFETIVA da janela, medida pelos
- * timestamps SH-2 (SPEC, seção Taxa/janela/FFT), com fallback para a nominal
- * (500 Hz) quando os timestamps não servirem. `f0_hz ≤ 0` → métricas
- * espectrais zeradas (RMS e kurtosis ainda calculadas).
- *
- * `janela` NULL → `metricas_out` recebe zeros (defensivo, não é caso normal).
- * `metricas_out` NULL → no-op. `n_amostras` > JANELA_N_AMOSTRAS → limitado.
+ * `f0_hz ≤ 0` → métricas espectrais zeradas (RMS/kurtosis ainda calculadas).
+ * O mapeamento de bins usa a fs EFETIVA da janela (timestamps SH-2), com
+ * fallback para a nominal. `janela` NULL → métricas zeradas;
+ * `metricas_out` NULL → no-op; n > JANELA_N_AMOSTRAS → limitado.
  */
 void analisar_janela(const janela_t *janela, float f0_hz, metricas_t *metricas_out);
 
-/*
- * Copia as métricas para a visão tabular `saida[métrica][eixo]`, na ordem
- * de `metrica_id_t` — formato consumido por baseline e alert_manager.
- * `metricas_out` NULL → `saida` recebe zeros. `saida` NULL → no-op.
- */
+/* Copia as métricas para a visão tabular `saida[métrica][eixo]` (consumo de
+ * baseline/alert_manager). `metricas_out` NULL → saída zerada; `saida` NULL →
+ * no-op. */
 void metricas_para_vetor(const metricas_t *metricas_out,
                          float saida[METRICA_NUM][JANELA_NUM_EIXOS]);
 
+/* Backstop RNF07: leituras > 20 g (ou não-finitas) são fisicamente
+ * impossíveis no BNO085 e indicam corrupção de transporte — rejeitar já na
+ * aquisição. */
+#define AMOSTRA_LIMITE_FISICO_MPS2 196.133f  /* 20 g */
+
+/* Predicado de validade física (RNF07, backstop). Não detecta glitches
+ * plausíveis (0,2–3 g) — esses cabem ao Hampel (`janela_hampel`). */
+bool amostra_valida(float a_mps2);
+
+/* Janela Hampel de 2k+1 = 11 amostras (~22 ms a 500 Hz): suprime impulsos
+ * isolados sem atenuar as bandas de 1x–5x (≥ 25 Hz p/ RPM 1500). */
+#define HAMPEL_K_VIZINHOS 5
+/* Limiar em MADs. 5·MAD ≈ 5σ gaussiano: senoide + harmônicos ficam em ~1·MAD
+ * (não comem vibração real) e o glitch isolado do I2C destoa >10·MAD. Valor
+ * anterior 3.0 substituía ~21% de vibração legítima (medido on-target). */
+#define HAMPEL_LIMIAR_MAD 5.0f
+
 /*
- * RMS = √(média(x²)) sobre n amostras contíguas, em m/s².
- * Acumulação em double para robustez numérica. NULL/n=0 → 0.0f.
+ * Filtro de Hampel (despike) por eixo — PURA. Para cada amostra: se
+ * |x[i]−mediana| > t·MAD da vizinhança de 2k+1 (bordas encolhem), substitui
+ * pela mediana (mantém n_amostras e o ritmo). Racional: glitches do I2C/SHTP
+ * são plausíveis (0,2–3 g) mas destoam dos vizinhos e inflacionam
+ * RMS/kurtosis; substitui — não descarta — para não viciar a taxa efetiva.
+ * In-place. `k`=0, `t`≤0 ou `janela` NULL → no-op. Retorna nº de
+ * substituições (telemetria).
  */
+uint32_t janela_hampel(janela_t *janela, int k, float t);
+
+/* RMS = √(média(x²)), acumulação em double. NULL/n=0 → 0.0f. */
 float calcular_rms(const float *amostras, size_t n_amostras);
 
-/*
- * Variante com passo (stride) entre amostras — usada por analisar_janela para
- * calcular o RMS de um eixo dentro do layout intercalado [amostra][eixo]
- * sem copiar dados. NULL/n=0/passo=0 → 0.0f.
- */
+/* Variante com passo (stride) — lê um eixo do layout intercalado
+ * [amostra][eixo] sem copiar. Mesmos defensivos + passo=0 → 0.0f. */
 float calcular_rms_passo(const float *amostras, size_t n_amostras, size_t passo);
 
-/*
- * Kurtosis amostral de Fisher (excesso) = m4/m2² − 3, com momentos centrais
- * viesados (divisão por n) e acumulação em double. Variância 0 (sinal
- * constante) → 0.0f. NULL/n=0 → 0.0f.
- */
+/* Kurtosis de Fisher (excesso) = m4/m2² − 3, momentos viesados (÷ n),
+ * acumulação em double. Variância 0 → 0.0f. NULL/n=0 → 0.0f. */
 float calcular_kurtosis(const float *amostras, size_t n_amostras);
 
-/*
- * Variante com passo (stride) da kurtosis — mesmo contrato de
- * calcular_kurtosis; usada por analisar_janela no layout intercalado
- * [amostra][eixo] sem copiar dados.
- */
+/* Variante com passo (stride) da kurtosis — mesmo contrato da acima. */
 float calcular_kurtosis_passo(const float *amostras, size_t n_amostras, size_t passo);
 
 #ifdef __cplusplus

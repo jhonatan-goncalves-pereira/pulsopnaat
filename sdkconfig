@@ -620,7 +620,7 @@ CONFIG_PULSOPNAAT_FILA_JANELAS=2
 #
 # Equipamento monitorado
 #
-CONFIG_PULSOPNAAT_RPM_NOMINAL=1500
+CONFIG_PULSOPNAAT_RPM_NOMINAL=1100
 # end of Equipamento monitorado
 # end of PulsoPNAAT
 
