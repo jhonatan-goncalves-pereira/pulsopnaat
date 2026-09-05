@@ -11,10 +11,16 @@
  */
 #include "unity.h"
 
+#include "signal_processing.h"
+
 extern void rodar_testes_signal_processing(void);
 
 void app_main(void)
 {
+    /* Tabelas de twiddle do esp-dsp — idempotente; sem isso as métricas
+     * espectrais dos testes sairiam zeradas (FFT retorna erro). */
+    signal_processing_init();
+
     UNITY_BEGIN(); /* void em Unity 2.6.0 — só UNITY_END() retorna falhas. */
     rodar_testes_signal_processing();
     UNITY_END();

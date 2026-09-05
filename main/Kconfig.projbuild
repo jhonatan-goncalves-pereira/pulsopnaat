@@ -66,4 +66,19 @@ menu "PulsoPNAAT"
                 no log.
     endmenu
 
+    menu "Equipamento monitorado"
+        config PULSOPNAAT_RPM_NOMINAL
+            int "RPM nominal do equipamento"
+            default 1500
+            range 100 30000
+            help
+                Rotação nominal do equipamento monitorado. Define a frequência
+                fundamental f0 = RPM/60 (Hz) usada no mapeamento dos bins
+                harmônicos da FFT: 1x = f0, 2x = 2·f0 e banda 3x–5x =
+                [3·f0, 5·f0]. Com fs = 500 Hz (Nyquist 250 Hz), rotações até
+                ~3000 RPM mantêm a banda 5x dentro do espectro confiável
+                (requisitos v2.1, §Nyquist). Configurado por equipamento no
+                boot; não há autodetecção de f0 (decisão travada).
+    endmenu
+
 endmenu
