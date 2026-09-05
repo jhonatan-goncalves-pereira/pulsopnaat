@@ -1,23 +1,28 @@
 /*
- * vibration_sensor — aquisição BNO085 RAW_ACCELEROMETER, janelamento e
+ * vibration_sensor — aquisição BNO085 ACCELEROMETER (0x01, m/s²), janelamento e
  * buffers por eixo (PulsoPNAAT).
  *
  * Arquitetura:
  *   - Task de amostragem: core 0, prioridade alta. Bloqueia no semáforo do pino
  *     INT do BNO085 (H_INTN, ativo baixo) e bombeia bno085_service() a cada
- *     reporte. O polling por delay não é viável a ~400 Hz (reporte a cada
+ *     reporte. O polling por delay não é viável a ~500 Hz (reporte a cada
  *     2,5 ms > tick de 10 ms com CONFIG_FREERTOS_HZ=100); o timeout do
  *     semáforo é apenas rede de segurança caso o INT pare de chegar.
  *   - O callback do driver (despachado por bno085_service() DENTRO da task de
  *     amostragem) apenas acumula amostras no buffer da janela — sem locks:
  *     callback e task rodam no mesmo contexto de execução.
- *   - Ao completar N=400 amostras por eixo (janela de 1 s), a janela é enviada
+ *   - Ao completar N=500 amostras por eixo (janela de 1 s; fs real do
+ *     ACCELEROMETER = 500 Hz), a janela é enviada
  *     por cópia via Queue para a task de processamento (core 1). Fila cheia →
  *     descarta a janela mais antiga, para que a amostragem nunca seja
  *     bloqueada nem atrasada pelo consumo.
  *   - A taxa efetiva é medida pelos timestamps SH-2 dos reportes (tempo do
  *     sensor, imune a batching do SHTP) e registrada no log por janela,
  *     confirmando empiricamente o Δ ≈ 2,5 ms entre amostras.
+ *   - Reporte ACCELEROMETER (0x01), não RAW (0x14): valores já em m/s² pelo
+ *     SH-2 (sem constante de conversão); não é produto de fusão, mas passa
+ *     pela correção de bias do engine de calibração. Justificativa completa
+ *     em SPEC.md (Barramento e sensor).
  */
 #pragma once
 
@@ -31,9 +36,9 @@ extern "C" {
 #endif
 
 /*
- * Inicializa o BNO085 (reset SH-2, callback, RAW_ACCELEROMETER no intervalo de
- * CONFIG_PULSOPNAAT_SENSOR_REPORT_INTERVAL_US µs), instala o ISR do pino INT e
- * cria a task de amostragem (core 0, prioridade alta).
+ * Inicializa o BNO085 (reset SH-2, callback, ACCELEROMETER (0x01) no intervalo
+ * de CONFIG_PULSOPNAAT_SENSOR_REPORT_INTERVAL_US µs), instala o ISR do pino INT
+ * e cria a task de amostragem (core 0, prioridade alta).
  *
  * `fila_janelas`: fila criada por app_main com itens do tipo `janela_t`
  * (signal_processing.h). A propriedade é de quem chama; este componente só

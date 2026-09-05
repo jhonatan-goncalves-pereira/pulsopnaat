@@ -23,23 +23,23 @@ static const char *TAG = "vibration_sensor";
  * tolerância). Com CONFIG_FREERTOS_HZ=100, cada tick vale 10 ms. */
 #define TIMEOUT_SERVICO_MS 20
 
-/* Faixa aceitável da taxa efetiva em torno dos 400 Hz nominais (±10%). */
-#define TAXA_MIN_HZ 360.0f
-#define TAXA_MAX_HZ 440.0f
+/* Faixa aceitável da taxa efetiva em torno dos 500 Hz nominais (±10%). */
+#define TAXA_MIN_HZ 450.0f
+#define TAXA_MAX_HZ 550.0f
 
 #define BNO085_INT_GPIO ((gpio_num_t)CONFIG_APP_BNO085_INT_GPIO)
 #define BNO085_RST_GPIO ((gpio_num_t)CONFIG_APP_BNO085_RST_GPIO)
 
 /*
- * Escala do RAW_ACCELEROMETER: o reporte 0x14 entrega contagens de ADC sem
- * escala documentada fixa (o fator nominal fica no FRS 0xE301 do sensor).
- * Valor nominal configurável: 1000 µg/LSB ≈ 1 mg por contagem. CONFIRMAR
- * empiricamente na bancada (repouso → eixo alinhado à gravidade ≈ 9,81 m/s²).
- * O pipeline é relativo ao baseline, então erro de escala não afeta a
- * classificação futura — apenas os valores absolutos.
+ * Reporte ACCELEROMETER (0x01): o SH-2 entrega valores JÁ em m/s² (Q8 fixo,
+ * decodificado pela lib sh2), sem constante de conversão no nosso lado. Não é
+ * produto de fusão — é o acelerômetro com correção de bias do engine de
+ * calibração. Decisão registrada em SPEC.md (Barramento e sensor); o RAW
+ * (0x14) foi descartado por não ter escala documentada (ficaria uma constante
+ * não validada no código). Risco residual conhecido e aceito: degraus de bias
+ * quando o estimador recalibra — lentos (<< 1 Hz), fora da banda de vibração
+ * e absorvidos pela classificação relativa ao baseline.
  */
-#define ESCALA_MS2_POR_LSB \
-    (CONFIG_PULSOPNAAT_RAW_ACCEL_UG_PER_LSB * 1e-6f * 9.80665f)
 
 static bno085_handle_t s_bno085 = NULL;
 static QueueHandle_t s_fila_janelas = NULL;
@@ -72,7 +72,7 @@ static void callback_amostra(bno085_handle_t handle,
     (void)handle;
     (void)ctx;
 
-    if (valor == NULL || valor->sensor_id != BNO085_SENSOR_RAW_ACCELEROMETER) {
+    if (valor == NULL || valor->sensor_id != BNO085_SENSOR_ACCELEROMETER) {
         return;
     }
     if (s_janela.n_amostras >= JANELA_N_AMOSTRAS) {
@@ -80,12 +80,9 @@ static void callback_amostra(bno085_handle_t handle,
     }
 
     const uint32_t i = s_janela.n_amostras;
-    s_janela.amostras[i][EIXO_X] =
-        (float)valor->data.raw_accelerometer.x * ESCALA_MS2_POR_LSB;
-    s_janela.amostras[i][EIXO_Y] =
-        (float)valor->data.raw_accelerometer.y * ESCALA_MS2_POR_LSB;
-    s_janela.amostras[i][EIXO_Z] =
-        (float)valor->data.raw_accelerometer.z * ESCALA_MS2_POR_LSB;
+    s_janela.amostras[i][EIXO_X] = valor->data.accelerometer.x;
+    s_janela.amostras[i][EIXO_Y] = valor->data.accelerometer.y;
+    s_janela.amostras[i][EIXO_Z] = valor->data.accelerometer.z;
 
     if (!s_janela_iniciada) {
         s_janela.ts_primeira_us = valor->timestamp_us;
@@ -128,7 +125,7 @@ static void finalizar_e_enviar_janela(void)
                   " (enviadas=%lu descartadas=%lu)",
                   (unsigned long)s_janelas_enviadas, (unsigned long)n,
                   delta_ms, taxa_hz,
-                  taxa_ok ? "" : " [FORA DA FAIXA ~400 Hz]",
+                  taxa_ok ? "" : " [FORA DA FAIXA ~500 Hz]",
                   (unsigned long)s_janelas_enviadas,
                   (unsigned long)s_janelas_descartadas);
 
@@ -192,9 +189,9 @@ esp_err_t vibration_sensor_start(i2c_master_dev_handle_t bno085_i2c_dev,
 
     ESP_RETURN_ON_ERROR(bno085_register_sensor_callback(s_bno085, callback_amostra, NULL),
                         TAG, "falha ao registrar callback");
-    ESP_RETURN_ON_ERROR(bno085_enable_sensor(s_bno085, BNO085_SENSOR_RAW_ACCELEROMETER,
+    ESP_RETURN_ON_ERROR(bno085_enable_sensor(s_bno085, BNO085_SENSOR_ACCELEROMETER,
                                              CONFIG_PULSOPNAAT_SENSOR_REPORT_INTERVAL_US),
-                        TAG, "falha ao habilitar RAW_ACCELEROMETER");
+                        TAG, "falha ao habilitar ACCELEROMETER");
 
     const BaseType_t rc = xTaskCreatePinnedToCore(
         tarefa_amostragem, "amostragem", TAREFA_AMOSTRAGEM_STACK, NULL,

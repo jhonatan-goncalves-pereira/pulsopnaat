@@ -2,9 +2,9 @@
  * signal_processing — matemática de sinais por janela, por eixo (PulsoPNAAT).
  *
  * Componente PURAMENTE determinístico: sem dependências de ESP-IDF, sem I/O e
- * sem estado global — os mesmos fontes compilam no alvo e no PC (host_tests/),
- * o que permite testar a matemática do pipeline com entradas sintéticas e
- * saídas esperadas conhecidas.
+ * sem estado global — os mesmos fontes compilam no alvo e no PC, o que permite
+ * testar a matemática do pipeline com entradas sintéticas e saídas esperadas
+ * conhecidas (validação on-target via test_app).
  *
  * Fase atual: apenas RMS. As próximas fases (FFT com Hann, kurtosis, THD)
  * estendem metricas_t sem mudar o contrato desta função de análise.
@@ -19,9 +19,10 @@ extern "C" {
 #endif
 
 /*
- * fs = 400 Hz com janela de 1 s → N = 400 amostras por eixo, 3 eixos (X, Y, Z).
+ * fs = 500 Hz (taxa nativa do ACCELEROMETER do BNO085, confirmada no log de
+ * taxa efetiva) com janela de 1 s → N = 500 amostras por eixo, 3 eixos.
  */
-#define JANELA_N_AMOSTRAS 400
+#define JANELA_N_AMOSTRAS 500
 #define JANELA_NUM_EIXOS  3
 
 typedef enum {

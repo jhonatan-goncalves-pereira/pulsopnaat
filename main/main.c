@@ -5,8 +5,8 @@
  * Pipeline de aquisição→janelamento→RMS:
  *
  *   [BNO085] --I2C--> [vibration_sensor] --Queue(janela_t)--> [processamento]
- *    RAW_ACCEL          task amostragem          400×3 floats     task core 1
- *    ~400 Hz            core 0, prio alta        janela de 1 s    prio média
+ *    ACCEL (m/s²)       task amostragem          500×3 floats     task core 1
+ *    ~500 Hz            core 0, prio alta        janela de 1 s    prio média
  *
  * A task de processamento consome cada janela, chama a função de análise
  * `analisar_janela` (signal_processing) e imprime o RMS por eixo no serial em
@@ -27,17 +27,22 @@
 static const char *TAG = "app_main";
 
 /* Processamento no core 1, prioridade média, isolado da amostragem (core 0)
- * para que o cálculo das métricas tenha timing determinístico. */
+ * para que o cálculo das métricas tenha timing determinístico.
+ * Stack: 8 KB — o buffer de janela fica EM STATIC (4,8 KB não caberiam na
+ * pilha; estouro canônico detectado on-device), e o restante dá headroom para
+ * esp-dsp (FFT 512, Hann) nas próximas fases. */
 #define TAREFA_PROCESSAMENTO_CORE  1
 #define TAREFA_PROCESSAMENTO_PRIORIDADE 5
-#define TAREFA_PROCESSAMENTO_STACK 4096
+#define TAREFA_PROCESSAMENTO_STACK 8192
 
 static QueueHandle_t s_fila_janelas;
 
 static void tarefa_processamento(void *arg)
 {
     (void)arg;
-    janela_t janela;
+    /* janela_t (~4,8 KB) em static: estouraria a pilha da task. Consumo é
+     * single-task (esta), então não há disputa pelo buffer. */
+    static janela_t janela;
     metricas_t metricas;
 
     /* Cabeçalho CSV: uma linha por janela, RMS por eixo em m/s². */
@@ -65,7 +70,7 @@ void app_main(void)
     ESP_ERROR_CHECK(uart_driver_install((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM,
                                         256, 1024, 0, NULL, 0));
 
-    ESP_LOGI(TAG, "PulsoPNAAT: aquisição RAW 400 Hz + janelamento + RMS");
+    ESP_LOGI(TAG, "PulsoPNAAT: aquisição ACCEL (m/s²) 500 Hz + janelamento + RMS");
 
     /* Fila de janelas: itens do tipo janela_t (~4,8 KB por cópia). Profundidade
      * curta de propósito — atraso acumulado indica consumo lento e a política
@@ -90,8 +95,8 @@ void app_main(void)
         return;
     }
 
-    ESP_LOGI(TAG, "pipeline ativa: BNO085 RAW_ACCEL @ %d µs → janelas de %d amostras "
-                  "→ RMS X,Y,Z no serial (CSV)",
+    ESP_LOGI(TAG, "pipeline ativa: BNO085 ACCELEROMETER (0x01, m/s²) @ %d µs → "
+                  "janelas de %d amostras → RMS X,Y,Z no serial (CSV)",
              CONFIG_PULSOPNAAT_SENSOR_REPORT_INTERVAL_US, JANELA_N_AMOSTRAS);
     vTaskDelete(NULL);
 }

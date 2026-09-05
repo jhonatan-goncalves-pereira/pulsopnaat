@@ -1,59 +1,64 @@
-# BNO085 Basic Read Example
+# PulsoPNAAT
 
-A minimal, self-contained ESP-IDF project demonstrating the `bno085` component: reads sensor data from a BNO085 9-axis IMU over I2C and prints it as CSV to the serial console. Sensor selection, output formatting, and timing are all configured via `idf.py menuconfig` — no code changes needed.
+Sistema embarcado de **manutenção preditiva por análise de vibração**: um nó de
+borda (ESP32-S3 + BNO085) fixado à carcaça de um equipamento rotativo amostra a
+aceleração triaxial a ~500 Hz, calcula métricas por janela de 1 s (RMS hoje;
+FFT, kurtosis e THD nas próximas fases), classifica o estado contra um baseline
+calibrado (normal / atenção / crítico) e emite alertas via MQTT + LED/buzzer.
 
-This example depends on `bno085` as a regular [ESP-IDF Component Registry](https://components.espressif.com/) dependency (see `main/idf_component.yml`), so it also serves as a template for a project that consumes the component the way an end user would, rather than building against the driver source directly.
+Documentos normativos: `requisitos.md` (v2.1) e `SPEC.md` (derivação técnica).
 
-## Hardware Wiring
+## Estrutura
 
-| BNO085 Pin | ESP32-S3 | Signal |
-|-----------|----------|--------|
-| SDA | GPIO 6 | I2C Data |
-| SCL | GPIO 7 | I2C Clock |
-| INT | GPIO 5 | Data-Ready (active low) |
-| RST | GPIO 4 | Reset (active low) |
-| VCC | 3.3V | Power |
-| GND | GND | Ground |
-
-**AD0:** GND → 0x4A, VCC → 0x4B
+```
+main/                      app_main: fila, tasks com pinning, wiring dos componentes
+components/
+  i2c_config/              barramento I2C do BNO085
+  vibration_sensor/        aquisição ACCELEROMETER (m/s²) @500 Hz, janelamento
+  signal_processing/       matemática pura do pipeline (RMS hoje) + test/test_*.c
+test_app/                  app de teste on-target (Unity no ESP32-S3)
+requisitos.md, SPEC.md     normativos
+```
 
 ## Build & Flash
 
-From inside this directory (`examples/basic_read/`):
+Requer ESP-IDF ≥ 5.5 (`​. $IDF_PATH/export.sh`):
 
 ```bash
-idf.py set-target esp32s3
+idf.py set-target esp32s3   # uma vez
 idf.py build
 idf.py flash monitor
 ```
 
-**Default serial output** (AR/VR Stabilized Rotation Vector, Euler angles):
-```
-arvr_roll, arvr_pitch, arvr_yaw, arvr_acc
--5.99, -0.94, 4.29, 180.0
--5.99, -0.94, 4.29, 180.0
-```
+Configuração do nó em `idf.py menuconfig` → **PulsoPNAAT** (pinos I2C/GPIO,
+intervalo de reporte do sensor, fila de janelas). Saída atual: CSV de RMS por
+eixo (m/s²) no serial, uma linha por janela.
 
-## Configuration
+## Testes (Unity on-target)
 
-Run `idf.py menuconfig` → **BNO085 Application Configuration** to change:
-- **Sensors to Enable** — which sensors are read from the device (rotation vectors, raw IMU, environmental, activity/motion detectors). Rotation vectors fuse on the BNO085 itself and don't require separately enabling the raw accelerometer/gyroscope/magnetometer.
-- **Sensors to Print** — which of the enabled sensors are included in the CSV output (a sensor can be read without being printed, but not printed without being read).
-- **Output Format** — CSV separator, header, optional timestamp column, and whether rotation vectors print as quaternion or Euler angles.
-- **Sensor Update Period** / **Output Period** — how often the BNO085 is polled vs. how often a CSV row is printed (the latter is floored to the former, since printing faster than the sensor refreshes would just repeat the same reading).
+Os testes vivem em `components/<comp>/test/` e rodam na placa pelo app de teste
+(mesmo componente `unity` do ESP-IDF, versão 2.6.0):
 
-For the full sensor list and API reference, see the [component README](../../README.md).
-
-## Code Structure
-
-```
-main/
-  ├── main.c             — I2C/GPIO setup, bno085_init(), sensor enable from Kconfig
-  ├── sensor.c/h         — ISR install, sensor callback, per-sensor data cache, polling task
-  ├── output.c/h         — CSV formatting and output task (separate timer from the polling task)
-  └── Kconfig.projbuild  — All menuconfig options for this example
+```bash
+idf.py -C test_app build flash monitor
+# resumo Unity no serial: "N Tests 0 Failures 0 Ignored / OK"
 ```
 
-## License
+Nova suíte: criar `components/<comp>/test/test_<comp>.c` (API core do Unity:
+`TEST_ASSERT_*`, função `rodar_testes_<comp>()`) e registrá-la no runner
+`test_app/main/test_app_main.c`.
 
-Apache-2.0, matching the `bno085` component.
+## Hardware (wiring Heltec LoRa V3)
+
+| BNO085 | ESP32-S3 | Sinal |
+|--------|----------|-------|
+| SDA | GPIO 6 | I2C data |
+| SCL | GPIO 7 | I2C clock |
+| INT (H_INTN) | GPIO 5 | data-ready, ativo baixo |
+| RST (NRST) | GPIO 4 | reset, ativo baixo |
+| AD0 | GND | endereço I2C 0x28 (VCC → 0x29) |
+| PS0/PS1 | GND | modo I2C (obrigatório) |
+| VCC/GND | 3V3/GND | alimentação |
+
+Driver do sensor: `rinku404/esp-idf-bno085` v1.2.0 (I2C apenas, HAL SH-2) —
+dependência registrada em `main/idf_component.yml`.
