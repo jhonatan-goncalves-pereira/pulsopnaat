@@ -1,15 +1,19 @@
 /*
  * app_main — montagem do sistema (PulsoPNAAT): filas, tasks com pinning e
- * conexão dos componentes (tickets 01–03).
+ * conexão dos componentes (tickets 01–04).
  *
  * Pipeline: BNO085 → vibration_sensor (amostragem, core 0) → fila janela_t →
  * processamento (core 1): Hampel + analisar_janela (RMS, Hann, FFT-512,
  * harmônicos, kurtosis, THD) → baseline (30 janelas, Welford) ou classificação
- * 3σ/6σ (votação por eixo, pior eixo) → alerta_servico (LED/buzzer).
+ * 3σ/6σ (votação por eixo, pior eixo) → alerta_servico (LED/buzzer) + MQTT.
  *
- * Calibração SEMPRE comandada (botão/serial — RF08), nunca automática no
+ * Calibração SEMPRE comandada (botão/serial/MQTT — RF08), nunca automática no
  * boot; o nó só entra em MONITORANDO com baseline válido.
  */
+#include <stdio.h>
+#include <string.h>
+#include <strings.h> /* strcasecmp — comandos serial insensíveis a caixa */
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -21,9 +25,6 @@
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
-
-#include <string.h>
-#include <strings.h> /* strcasecmp — comandos serial insensíveis a caixa */
 
 #include "alert_manager.h"
 #include "alerta_servico.h"
@@ -67,45 +68,32 @@ static bool s_baseline_presente;
 static const char *nome_estado_maquina(estado_maquina_t e)
 {
     switch (e) {
-    case ESTADO_MAQ_BOOT:
-        return "BOOT";
-    case ESTADO_MAQ_CALIBRANDO:
-        return "CALIBRANDO";
-    case ESTADO_MAQ_MONITORANDO:
-        return "MONITORANDO";
-    case ESTADO_MAQ_CONTINGENCIA:
-        return "CONTINGENCIA";
-    default:
-        return "?";
+    case ESTADO_MAQ_BOOT: return "BOOT";
+    case ESTADO_MAQ_CALIBRANDO: return "CALIBRANDO";
+    case ESTADO_MAQ_MONITORANDO: return "MONITORANDO";
+    case ESTADO_MAQ_CONTINGENCIA: return "CONTINGENCIA";
+    default: return "?";
     }
 }
 
 static const char *nome_estado_equipamento(estado_equipamento_t e)
 {
     switch (e) {
-    case ESTADO_EQUIP_VERDE:
-        return "verde (normal)";
-    case ESTADO_EQUIP_AMARELO:
-        return "amarelo (atenção)";
-    case ESTADO_EQUIP_VERMELHO:
-        return "vermelho (crítico)";
-    default:
-        return "?";
+    case ESTADO_EQUIP_VERDE: return "verde (normal)";
+    case ESTADO_EQUIP_AMARELO: return "amarelo (atenção)";
+    case ESTADO_EQUIP_VERMELHO: return "vermelho (crítico)";
+    default: return "?";
     }
 }
 
 /* --------------------------- task de comandos ---------------------------- */
 
-/* Comandos serial (RF08): "calibrar" e "status". */
 static void processar_linha(const char *linha)
 {
-    if (linha[0] == '\0') {
-        return;
-    }
+    if (linha[0] == '\0') return;
+    
     if (strcasecmp(linha, "calibrar") == 0) {
-        ESP_LOGI(TAG, "comando serial: calibrar (máquina em %s — o comando só "
-                      "surte efeito a partir de BOOT/MONITORANDO)",
-                 nome_estado_maquina(alerta_servico_estado_maquina()));
+        ESP_LOGI(TAG, "comando serial: calibrar (máquina em %s)", nome_estado_maquina(alerta_servico_estado_maquina()));
         alerta_servico_publicar_evento(EVENTO_INICIAR_CALIBRACAO);
         return;
     }
@@ -116,22 +104,15 @@ static void processar_linha(const char *linha)
                s_baseline_presente ? "presente" : "ausente",
                (long long)(esp_timer_get_time() / 1000000LL));
         if (s_baseline_presente) {
-            printf("baseline RMS (média±σ): X=%.4f±%.4f Y=%.4f±%.4f "
-                   "Z=%.4f±%.4f m/s²\n",
-                   s_baseline.media[METRICA_RMS][EIXO_X],
-                   s_baseline.desvio_padrao[METRICA_RMS][EIXO_X],
-                   s_baseline.media[METRICA_RMS][EIXO_Y],
-                   s_baseline.desvio_padrao[METRICA_RMS][EIXO_Y],
-                   s_baseline.media[METRICA_RMS][EIXO_Z],
-                   s_baseline.desvio_padrao[METRICA_RMS][EIXO_Z]);
-            printf("limiares por métrica/eixo: atenção=média+3σ "
-                   "crítico=média+6σ\n");
+            printf("baseline RMS (média±σ): X=%.4f±%.4f Y=%.4f±%.4f Z=%.4f±%.4f m/s²\n",
+                   s_baseline.media[METRICA_RMS][EIXO_X], s_baseline.desvio_padrao[METRICA_RMS][EIXO_X],
+                   s_baseline.media[METRICA_RMS][EIXO_Y], s_baseline.desvio_padrao[METRICA_RMS][EIXO_Y],
+                   s_baseline.media[METRICA_RMS][EIXO_Z], s_baseline.desvio_padrao[METRICA_RMS][EIXO_Z]);
         }
         return;
     }
     printf("comandos: calibrar | status\n");
 }
-
 
 static void wifi_state_changed(wifi_state_t state)
 {
@@ -147,11 +128,8 @@ static void mqtt_state_changed(mqtt_client_state_t state)
 {
     if (state == MQTT_CLIENT_STATE_SUBSCRIBED) {
         ESP_LOGI(TAG, "MQTT conectado e inscrito nos tópicos. Sistema online.");
-        // Publica status inicial
         char status_msg[128];
-        snprintf(status_msg, sizeof(status_msg),
-                 "{\"status\":\"online\",\"baseline\":\"%s\"}",
-                 s_baseline_presente ? "presente" : "ausente");
+        snprintf(status_msg, sizeof(status_msg), "{\"status\":\"online\",\"baseline\":\"%s\"}", s_baseline_presente ? "presente" : "ausente");
         mqtt_client_publish(MQTT_TOPIC_STATUS, status_msg, 0, 1);
     }
 }
@@ -160,14 +138,12 @@ static void mqtt_data_received(const char *topic, const char *data, int data_len
 {
     ESP_LOGI(TAG, "Comando MQTT recebido em %s: %.*s", topic, data_len, data);
     
-    // Integração com o sistema de comandos existente (RF08)
     if (strncasecmp(data, "calibrar", data_len) == 0) {
         ESP_LOGI(TAG, "Acionando calibração via MQTT");
         alerta_servico_publicar_evento(EVENTO_INICIAR_CALIBRACAO);
     } else if (strncasecmp(data, "status", data_len) == 0) {
         char status_msg[256];
-        snprintf(status_msg, sizeof(status_msg),
-                 "{\"maquina\":\"%s\",\"equipamento\":\"%s\",\"baseline\":%s}",
+        snprintf(status_msg, sizeof(status_msg), "{\"maquina\":\"%s\",\"equipamento\":\"%s\",\"baseline\":%s}",
                  nome_estado_maquina(alerta_servico_estado_maquina()),
                  nome_estado_equipamento(alerta_servico_estado_equipamento()),
                  s_baseline_presente ? "true" : "false");
@@ -178,11 +154,7 @@ static void mqtt_data_received(const char *topic, const char *data, int data_len
 static void tarefa_comandos(void *arg)
 {
     (void)arg;
-
-    /* Botão de calibração (RF08): ativo baixo, pull-up interno. Debounce por
-     * contagem de leituras estáveis (2 ticks de 20 ms para firmar). */
-    const gpio_num_t botao =
-        (gpio_num_t)CONFIG_PULSOPNAAT_BOTAO_CALIBRACAO_GPIO;
+    const gpio_num_t botao = (gpio_num_t)CONFIG_PULSOPNAAT_BOTAO_CALIBRACAO_GPIO;
     gpio_config_t cfg_botao = {
         .pin_bit_mask = 1ULL << botao,
         .mode = GPIO_MODE_INPUT,
@@ -198,13 +170,10 @@ static void tarefa_comandos(void *arg)
     bool pronto_para_apertar = true;
 
     for (;;) {
-        /* --- botão --- */
         if (gpio_get_level(botao) == 0) {
-            estaveis_baixo++;
-            estaveis_alto = 0;
+            estaveis_baixo++; estaveis_alto = 0;
         } else {
-            estaveis_alto++;
-            estaveis_baixo = 0;
+            estaveis_alto++; estaveis_baixo = 0;
         }
         if (pronto_para_apertar && estaveis_baixo >= 2) {
             pronto_para_apertar = false;
@@ -215,24 +184,19 @@ static void tarefa_comandos(void *arg)
             pronto_para_apertar = true;
         }
 
-        /* --- serial: monta linhas até \n/\r --- */
         uint8_t ch;
-        while (uart_read_bytes((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM,
-                               &ch, 1, 0) == 1) {
+        while (uart_read_bytes((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM, &ch, 1, 0) == 1) {
             if (ch == '\n' || ch == '\r') {
-                if (len >= sizeof(linha)) {
-                    len = sizeof(linha) - 1; /* trunca e usa o que couber */
-                }
+                if (len >= sizeof(linha)) len = sizeof(linha) - 1;
                 linha[len] = '\0';
                 processar_linha(linha);
                 len = 0;
             } else if (len < sizeof(linha) - 1) {
                 linha[len++] = (char)ch;
             } else {
-                len = sizeof(linha); /* estourou: marca para truncar */
+                len = sizeof(linha);
             }
         }
-
         vTaskDelay(pdMS_TO_TICKS(COMANDOS_TICK_MS));
     }
 }
@@ -242,134 +206,86 @@ static void tarefa_comandos(void *arg)
 static void tarefa_processamento(void *arg)
 {
     (void)arg;
-    /* f0 = RPM_nominal/60 — Kconfig no boot, fixo na execução. */
     const float f0_hz = (float)CONFIG_PULSOPNAAT_RPM_NOMINAL / 60.0f;
-
-    /* janela_t (~4,8 KB) em static: estouraria a pilha da task. Consumo
-     * single-task por esta task — o que também torna seguros os buffers de
-     * rascunho do signal_processing e os acumuladores de baseline. */
     static janela_t janela;
     metricas_t metricas;
-
     estado_maquina_t estado_visto = ESTADO_MAQ_BOOT;
     bool avisou_sem_baseline = false;
 
-    /* Cabeçalho CSV: uma linha por janela, 6 métricas × 3 eixos (X, Y, Z). */
-    printf("# rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,"
-           "rms_y,h1x_y,h2x_y,b3x5_y,kurt_y,thd_y,"
-           "rms_z,h1x_z,h2x_z,b3x5_z,kurt_z,thd_z\n");
-    printf("# unidades: rms/h1x/h2x/b3x5 em m/s²; kurt e thd adimensionais;"
-           " f0 = %.3f Hz (RPM nominal %d)\n",
-           f0_hz, CONFIG_PULSOPNAAT_RPM_NOMINAL);
+    printf("# rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,h1x_y,h2x_y,b3x5_y,kurt_y,thd_y,rms_z,h1x_z,h2x_z,b3x5_z,kurt_z,thd_z\n");
+    printf("# unidades: rms/h1x/h2x/b3x5 em m/s²; kurt e thd adimensionais; f0 = %.3f Hz (RPM nominal %d)\n", f0_hz, CONFIG_PULSOPNAAT_RPM_NOMINAL);
 
     for (;;) {
-        if (xQueueReceive(s_fila_janelas, &janela, portMAX_DELAY) != pdTRUE) {
-            continue;
-        }
+        if (xQueueReceive(s_fila_janelas, &janela, portMAX_DELAY) != pdTRUE) continue;
 
-        /* RNF01: medição da latência de processamento (entrada → saída). */
         const int64_t t0 = esp_timer_get_time();
-
-        /* Hampel: remove glitches plausíveis (0,2–3 g) do transporte I2C/SHTP
-         * que passam pelo backstop físico e inflacionam RMS/kurtosis. */
         (void)janela_hampel(&janela, HAMPEL_K_VIZINHOS, HAMPEL_LIMIAR_MAD);
-
         analisar_janela(&janela, f0_hz, &metricas);
         const int64_t latencia_us = esp_timer_get_time() - t0;
 
-        printf("%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
-               "%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
-               "%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
-               metricas.rms[EIXO_X],
-               metricas.harmonica_1x[EIXO_X], metricas.harmonica_2x[EIXO_X],
-               metricas.banda_3x_5x[EIXO_X], metricas.kurtosis[EIXO_X],
-               metricas.thd[EIXO_X],
-               metricas.rms[EIXO_Y],
-               metricas.harmonica_1x[EIXO_Y], metricas.harmonica_2x[EIXO_Y],
-               metricas.banda_3x_5x[EIXO_Y], metricas.kurtosis[EIXO_Y],
-               metricas.thd[EIXO_Y],
-               metricas.rms[EIXO_Z],
-               metricas.harmonica_1x[EIXO_Z], metricas.harmonica_2x[EIXO_Z],
-               metricas.banda_3x_5x[EIXO_Z], metricas.kurtosis[EIXO_Z],
-               metricas.thd[EIXO_Z]);
+        printf("%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+               metricas.rms[EIXO_X], metricas.harmonica_1x[EIXO_X], metricas.harmonica_2x[EIXO_X], metricas.banda_3x_5x[EIXO_X], metricas.kurtosis[EIXO_X], metricas.thd[EIXO_X],
+               metricas.rms[EIXO_Y], metricas.harmonica_1x[EIXO_Y], metricas.harmonica_2x[EIXO_Y], metricas.banda_3x_5x[EIXO_Y], metricas.kurtosis[EIXO_Y], metricas.thd[EIXO_Y],
+               metricas.rms[EIXO_Z], metricas.harmonica_1x[EIXO_Z], metricas.harmonica_2x[EIXO_Z], metricas.banda_3x_5x[EIXO_Z], metricas.kurtosis[EIXO_Z], metricas.thd[EIXO_Z]);
 
         if (latencia_us >= RNF01_LIMITE_US) {
-            ESP_LOGW(TAG, "RNF01 VIOLADO: janela processada em %lld ms "
-                          "(limite: %lld ms)", latencia_us / 1000LL,
-                     (long long)(RNF01_LIMITE_US / 1000LL));
+            ESP_LOGW(TAG, "RNF01 VIOLADO: janela processada em %lld ms (limite: %lld ms)", latencia_us / 1000LL, (long long)(RNF01_LIMITE_US / 1000LL));
         }
 
-        /* -------- decisão (ticket 03): calibração OU classificação ------- */
         const estado_maquina_t estado = alerta_servico_estado_maquina();
-        const bool entrou_calibrando =
-            (estado == ESTADO_MAQ_CALIBRANDO) && (estado_visto != estado);
+        const bool entrou_calibrando = (estado == ESTADO_MAQ_CALIBRANDO) && (estado_visto != estado);
         estado_visto = estado;
 
         switch (estado) {
         case ESTADO_MAQ_CALIBRANDO: {
             if (entrou_calibrando) {
                 baseline_calibracao_iniciar(&s_calibracao);
-                ESP_LOGI(TAG, "calibração iniciada: mantenha o regime saudável "
-                              "por %d janelas (~%d s)", BASELINE_N_JANELAS,
-                         BASELINE_N_JANELAS);
+                ESP_LOGI(TAG, "calibração iniciada: mantenha o regime saudável por %d janelas (~%d s)", BASELINE_N_JANELAS, BASELINE_N_JANELAS);
             }
             if (baseline_calibracao_adicionar(&s_calibracao, &metricas)) {
                 baseline_t novo;
-                if (baseline_calibracao_extrair(&s_calibracao, &novo) &&
-                    baseline_valido(&novo)) {
+                if (baseline_calibracao_extrair(&s_calibracao, &novo) && baseline_valido(&novo)) {
                     s_baseline = novo;
                     s_baseline_presente = true;
                     const esp_err_t err = baseline_salvar_nvs(&s_baseline);
                     if (err != ESP_OK) {
-                        /* Baseline válido em RAM; reboot pedirá recalibração
-                         * (NVS desejável, não obrigatória — RF08). */
-                        ESP_LOGW(TAG, "calibração OK, mas não persistiu na "
-                                      "NVS: %s", esp_err_to_name(err));
+                        ESP_LOGW(TAG, "calibração OK, mas não persistiu na NVS: %s", esp_err_to_name(err));
                     } else {
-                        ESP_LOGI(TAG, "baseline calibrado (%d janelas) e "
-                                      "salvo na NVS", BASELINE_N_JANELAS);
+                        ESP_LOGI(TAG, "baseline calibrado (%d janelas) e salvo na NVS", BASELINE_N_JANELAS);
                     }
                     alerta_servico_publicar_evento(EVENTO_BASELINE_DISPONIVEL);
                 } else {
-                    /* Métricas degeneradas: reinicia a coleta em vez de
-                     * persistir um baseline inutilizável. */
-                    ESP_LOGE(TAG, "métricas inválidas na calibração — "
-                                  "coleta reiniciada");
+                    ESP_LOGE(TAG, "métricas inválidas na calibração — coleta reiniciada");
                     baseline_calibracao_iniciar(&s_calibracao);
                 }
             } else {
-                ESP_LOGI(TAG, "calibração: janela %u/%u", s_calibracao.n,
-                         (uint32_t)BASELINE_N_JANELAS);
+                ESP_LOGI(TAG, "calibração: janela %u/%u", s_calibracao.n, (uint32_t)BASELINE_N_JANELAS);
             }
             break;
         }
-
-       case ESTADO_MAQ_MONITORANDO:
+        case ESTADO_MAQ_MONITORANDO:
         case ESTADO_MAQ_CONTINGENCIA: {
-            /* 3σ/6σ por métrica, votação por eixo, pior eixo (RF04). Na
-             * contingência o monitoramento segue localmente (publicação/buffer:
-             * ticket 04). A persistência (K janelas consecutivas, requisitos
-             * v2.3) está dentro de definir_..., que devolve o estado efetivo:
-             * só transições confirmadas são anunciadas. */
             const estado_equipamento_t novo = alerta_classificar_janela(&s_baseline, &metricas);
             const estado_equipamento_t anterior = alerta_servico_estado_equipamento();
             const estado_equipamento_t efetivo = alerta_servico_definir_estado_equipamento(novo);
             
             if (efetivo != anterior) {
-                ESP_LOGI(TAG, "estado do equipamento: %s → %s",
-                         nome_estado_equipamento(anterior),
-                         nome_estado_equipamento(efetivo));
+                ESP_LOGI(TAG, "estado do equipamento: %s → %s", nome_estado_equipamento(anterior), nome_estado_equipamento(efetivo));
                 
-                // --- TICKET 04: Publicar alerta no MQTT apenas em mudança de estado ---
                 if (efetivo == ESTADO_EQUIP_AMARELO || efetivo == ESTADO_EQUIP_VERMELHO) {
                     char alert_msg[160];
-                    snprintf(alert_msg, sizeof(alert_msg),
-                             "{\"estado\":\"%s\",\"rms_x\":%.4f,\"rms_y\":%.4f,\"rms_z\":%.4f}",
-                             nome_estado_equipamento(efetivo),
-                             metricas.rms[EIXO_X], metricas.rms[EIXO_Y], metricas.rms[EIXO_Z]);
-                    
+                    snprintf(alert_msg, sizeof(alert_msg), "{\"estado\":\"%s\",\"rms_x\":%.4f,\"rms_y\":%.4f,\"rms_z\":%.4f}",
+                             nome_estado_equipamento(efetivo), metricas.rms[EIXO_X], metricas.rms[EIXO_Y], metricas.rms[EIXO_Z]);
                     mqtt_client_publish(MQTT_TOPIC_ALERT, alert_msg, 0, 1);
                 }
+            }
+            break;
+        }
+        case ESTADO_MAQ_BOOT:
+        default:
+            if (!avisou_sem_baseline) {
+                avisou_sem_baseline = true;
+                ESP_LOGW(TAG, "sem baseline: janelas descartadas até a calibração");
             }
             break;
         }
@@ -380,46 +296,27 @@ static void tarefa_processamento(void *arg)
 
 void app_main(void)
 {
-    /* Driver da UART de console com ring buffer de TX antes de qualquer
-     * printf(): sem isso printf() é busy-wait por caractere e uma linha grande
-     * gira a CPU até derrubar a IDLE/watchdog. Também serve a entrada da
-     * tarefa de comandos. */
     ESP_ERROR_CHECK(uart_driver_install((uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM, 256, 1024, 0, NULL, 0));
-
     ESP_LOGI(TAG, "PulsoPNAAT: aquisição 400 Hz + cadeia espectral + baseline/classificação + WiFi/MQTT (tickets 01–04)");
-
-     /* Tabelas do esp-dsp para a FFT (idempotente; aborta no boot se falhar). */
     signal_processing_init();
 
-    
-    /* NVS (RF08). Padrão do IDF: sem páginas livres/versão nova → apaga e
-     * reinicia o init. */
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         err = nvs_flash_init();
     }
-
-    /* Serviço de alerta ANTES de qualquer evento (cria fila + task coordenadora). */
     ESP_ERROR_CHECK(err);
 
-    // --- TICKET 04: Inicialização WiFi e MQTT (antes do Alert Service) ---
     ESP_LOGI(TAG, "Inicializando WiFi e MQTT...");
     ESP_ERROR_CHECK(wifi_config_init());
     wifi_config_register_callback(wifi_state_changed);
-
     ESP_ERROR_CHECK(mqtt_client_init());
     mqtt_client_register_state_callback(mqtt_state_changed);
     mqtt_client_register_data_callback(mqtt_data_received);
-
-    // Inicia a conexão WiFi (o MQTT iniciará automaticamente no callback quando tiver IP)
     ESP_ERROR_CHECK(wifi_config_start());
-    // ---------------------------------------------------------------------
 
     ESP_ERROR_CHECK(alerta_servico_iniciar());
 
-     /* Baseline da NVS → MONITORANDO direto: nunca recalibra no boot sem
-     * comando (RF08) nem monitora sem baseline (user story 9). */
     err = baseline_carregar_nvs(&s_baseline);
     if (err == ESP_OK) {
         s_baseline_presente = true;
@@ -431,9 +328,6 @@ void app_main(void)
         ESP_LOGW(TAG, "baseline na NVS ilegível (%s)", esp_err_to_name(err));
     }
 
-       /* Fila de janelas (janela_t, ~4,8 KB por cópia). Profundidade curta de
-     * propósito: fila cheia → descarta a mais antiga, nunca trava a amostragem. */
- 
     s_fila_janelas = xQueueCreate(CONFIG_PULSOPNAAT_FILA_JANELAS, sizeof(janela_t));
     if (s_fila_janelas == NULL) {
         ESP_LOGE(TAG, "falha ao criar fila de janelas");
@@ -445,18 +339,12 @@ void app_main(void)
     ESP_ERROR_CHECK(i2c_config_init(&bus_handle, &bno085_dev));
     ESP_ERROR_CHECK(vibration_sensor_start(bno085_dev, s_fila_janelas));
 
-    if (xTaskCreatePinnedToCore(tarefa_processamento, "processamento",
-                                TAREFA_PROCESSAMENTO_STACK, NULL,
-                                TAREFA_PROCESSAMENTO_PRIORIDADE, NULL,
-                                TAREFA_PROCESSAMENTO_CORE) != pdPASS) {
+    if (xTaskCreatePinnedToCore(tarefa_processamento, "processamento", TAREFA_PROCESSAMENTO_STACK, NULL, TAREFA_PROCESSAMENTO_PRIORIDADE, NULL, TAREFA_PROCESSAMENTO_CORE) != pdPASS) {
         ESP_LOGE(TAG, "falha ao criar task de processamento");
         return; 
     }
 
-    if (xTaskCreatePinnedToCore(tarefa_comandos, "comandos",
-                                TAREFA_COMANDOS_STACK, NULL,
-                                TAREFA_COMANDOS_PRIORIDADE, NULL,
-                                TAREFA_COMANDOS_CORE) != pdPASS) {
+    if (xTaskCreatePinnedToCore(tarefa_comandos, "comandos", TAREFA_COMANDOS_STACK, NULL, TAREFA_COMANDOS_PRIORIDADE, NULL, TAREFA_COMANDOS_CORE) != pdPASS) {
         ESP_LOGE(TAG, "falha ao criar task de comandos");
         return;
     }
@@ -464,5 +352,3 @@ void app_main(void)
     ESP_LOGI(TAG, "Pipeline ativa e conectividade configurada. Aguardando IP...");
     vTaskDelete(NULL);
 }
-
-

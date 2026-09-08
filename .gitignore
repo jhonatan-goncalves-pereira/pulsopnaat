@@ -1,39 +1,95 @@
-# --- ESP-IDF build artifacts ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Directory metadata
+.directory
+
+# Temporary files
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# Log files
+*.log
+
+# Build artifacts and directories
+**/build/
 build/
+*.o
+*.a
+*.out
+*.exe # For any host-side utilities compiled on Windows
+
+# ESP-IDF specific build outputs
+*.bin
+*.elf
+*.map
+flasher_args.json # Generated in build directory
 sdkconfig.old
+sdkconfig
 sdkconfig.old.*
+
+# ESP-IDF dependencies
+# For older versions or manual component management
+/components/.idf/
+**/components/.idf/
+# For modern ESP-IDF component manager
+managed_components/
+# If ESP-IDF tools are installed/referenced locally to the project
+.espressif/
 
 # --- Testes on-target (test_app) ---
 test_app/build/
 test_app/sdkconfig
 test_app/sdkconfig.old
 
-# --- Managed components (restored via idf_component.yml + dependencies.lock) ---
-managed_components/
-
 # --- Dependencies lock is generated; keep if you prefer pinning, ignore if not ---
 # dependencies.lock
 
-# --- CMake / ninja caches ---
+# CMake generated files
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+
+# --- CMake / ninja caches ---
 *.ninja
 .ninja_*
+
+# Python environment files
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+dist/
+
+# Virtual environment folders
+venv/
+.venv/
+env/
+
+# Language Servers
+.clangd/
+.ccls-cache/
 compile_commands.json
 
-# --- Editor / OS cruft ---
+# Editor / OS cruft
 .vscode/
 .idea/
-*.swp
-*.swo
-*~
-.DS_Store
 
-# --- Python venvs / tooling (ESP-IDF uses Python) ---
-.venv/
-venv/
-__pycache__/
-*.pyc
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-*.log
+# User-specific configuration files
+*.user
+*.workspace # General workspace files, can be from various tools
+*.suo       # Visual Studio Solution User Options
+*.sln.docstates # Visual Studio
