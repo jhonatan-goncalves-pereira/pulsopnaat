@@ -1,0 +1,84 @@
+# Configuração do componente alert_manager (PulpoPNAAT, ticket 03).
+#
+# Kconfig DE COMPONENTE (não Kconfig.projbuild em main/): assim os símbolos
+# existem em QUALQUER projeto que inclua o componente — o firmware principal
+# (main/) e o app de teste (test_app/).
+#
+# LED: RGB EXTERNO de 3 canais discretos (um GPIO por cor) — a Heltec V3 NÃO
+# tem LED RGB endereçável utilizável. Resistor série por canal (~220–330 Ω)
+# define o brilho. Catodo comum → canais ligam em nível ALTO (default);
+# anodo comum → desmarque PULSOPNAAT_LED_ATIVO_ALTO. GPIO negativo desativa
+# o canal (ex.: LED de cor única).
+
+menu "PulsoPNAAT: sinalização local e comando de calibração"
+
+    config PULSOPNAAT_LED_R_GPIO
+        int "GPIO do canal R do LED RGB"
+        default 39
+        help
+            GPIO do canal vermelho do LED RGB externo (com resistor série).
+            Indicação (RF06): vermelho = crítico; R+G = amarelo (atenção);
+            R+G+B = branco (sem conectividade). Valor negativo desativa.
+
+    config PULSOPNAAT_LED_G_GPIO
+        int "GPIO do canal G do LED RGB"
+        default 40
+        help
+            GPIO do canal verde do LED RGB externo. Verde fixo = normal
+            (monitorando). Valor negativo desativa o canal.
+
+    config PULSOPNAAT_LED_B_GPIO
+        int "GPIO do canal B do LED RGB"
+        default 41
+        help
+            GPIO do canal azul do LED RGB externo. Azul piscando rápido =
+            calibrando ("não perturbe o equipamento"). Negativo desativa.
+
+    config PULSOPNAAT_LED_ATIVO_ALTO
+        bool "Canais do LED ligam em nível alto (catodo comum)"
+        default y
+        help
+            Marcado: catodo comum (GPIO em 1 acende o canal, GPIO fornece
+            corrente). Desmarque para anodo comum (GPIO em 0 acende, GPIO
+            drena a corrente).
+
+    config PULSOPNAAT_BUZZER_GPIO
+        int "GPIO do buzzer (ativo)"
+        default 42
+        help
+            Buzzer ativo (liga/desliga por nível digital — sem PWM). Ajuste
+            ao wiring da bancada (no Heltec V3, evite 8–14 do rádio LoRa e
+            17/18/21 do OLED). Soa APENAS em estado crítico (RF06).
+
+    config PULSOPNAAT_BUZZER_ATIVO_ALTO
+        bool "Buzzer liga em nível alto"
+        default y
+        help
+            Marcado: nível alto no GPIO liga o buzzer (módulos com transistor
+            ou pino direto). Desmarque se o módulo liga em nível baixo.
+
+    config PULSOPNAAT_BOTAO_CALIBRACAO_GPIO
+        int "GPIO do botão de calibração (ativo baixo)"
+        default 0
+        help
+            Botão físico que dispara a calibração do baseline (RF08 — sempre
+            COMANDADA, nunca automática no boot). Padrão: botão BOOT da
+            Heltec V3 (GPIO 0, ativo baixo, pull-up interno). Pressionar com
+            o motor em regime saudável.
+
+    config PULSOPNAAT_ALERTA_JANELAS_CONFIRMAR
+        int "Janelas consecutivas para confirmar mudança de estado"
+        default 3
+        range 1 10
+        help
+            Persistência da classificação (requisitos v2.3, debounce estilo
+            on/off delay de alarme): a classificação de uma janela só se
+            torna o estado do equipamento após este nº de janelas
+            CONSECUTIVAS do mesmo candidato. Motivação medida on-target: no
+            repouso a kurtosis sobre ruído de quantização do 0x04 gera picos
+            de janela única (20–400) que flipavam o estado a cada janela; uma
+            falha real persiste por várias janelas e dispara normalmente.
+            1 = adoção imediata (comportamento anterior à v2.3). Com 1 s por
+            janela, 3 = alarme confirmado em 3 s (atraso de 2 s é o custo).
+
+endmenu

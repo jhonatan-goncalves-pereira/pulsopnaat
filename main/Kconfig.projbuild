@@ -1,0 +1,84 @@
+menu "PulsoPNAAT"
+
+    menu "I2C & GPIO (BNO085)"
+        config APP_BNO085_I2C_SDA_GPIO
+            int "I2C SDA GPIO"
+            default 6
+            help
+                GPIO pin for I2C SDA (data line).
+
+        config APP_BNO085_I2C_SCL_GPIO
+            int "I2C SCL GPIO"
+            default 7
+            help
+                GPIO pin for I2C SCL (clock line).
+
+        config APP_BNO085_I2C_ADDR
+            hex "BNO085 I2C Address"
+            default 0x28
+            range 0x00 0x7F
+            help
+                Endereço I2C de 7 bits do BNO085 no barramento:
+                0x28 quando AD0=GND, 0x29 quando AD0=VCC
+                (wiring do Heltec LoRa V3 no README do driver: AD0→GND → 0x28).
+
+        config APP_BNO085_I2C_FREQ_HZ
+            int "I2C Clock Frequency (Hz)"
+            default 400000
+            range 100000 1000000
+            help
+                Frequência do barramento I2C. Padrão: 400 kHz.
+
+        config APP_BNO085_INT_GPIO
+            int "BNO085 INT (data-ready) GPIO"
+            default 5
+            help
+                GPIO pin for BNO085 H_INTN interrupt (active-low).
+
+        config APP_BNO085_RST_GPIO
+            int "BNO085 RST (reset) GPIO"
+            default 4
+            help
+                GPIO pin for BNO085 NRST reset (active-low).
+    endmenu
+
+    menu "Aquisição de vibração"
+        config PULSOPNAAT_SENSOR_REPORT_INTERVAL_US
+            int "Intervalo de reporte do LINEAR_ACCELERATION (µs)"
+            default 2500
+            range 1000 1000000
+            help
+                Período de reporte do SH2 LINEAR_ACCELERATION (0x04, valores
+                já em m/s² com a gravidade removida por fusão). O engine do
+                BNO085 limita/quantiza o pedido ao máximo do reporte: 400 Hz
+                (2500 µs, datasheet BNO085). Janela de 1 s = N = 400 amostras;
+                Nyquist 200 Hz.
+
+        config PULSOPNAAT_FILA_JANELAS
+            int "Profundidade da fila de janelas (amostragem → processamento)"
+            default 2
+            range 1 8
+            help
+                Cada item é uma janela triaxial de 400×3 amostras float
+                (~4,8 KB). Fila cheia → a janela mais antiga é descartada
+                (overwrite-oldest), para que a amostragem nunca seja bloqueada
+                nem atrasada pelo consumo; o descarte é contado e registrado
+                no log.
+    endmenu
+
+    menu "Equipamento monitorado"
+        config PULSOPNAAT_RPM_NOMINAL
+            int "RPM nominal do equipamento"
+            default 1500
+            range 100 30000
+            help
+                Rotação nominal do equipamento monitorado. Define a frequência
+                fundamental f0 = RPM/60 (Hz) usada no mapeamento dos bins
+                harmônicos da FFT: 1x = f0, 2x = 2·f0 e banda 3x–5x =
+                [3·f0, 5·f0]. Com fs = 400 Hz (Nyquist 200 Hz), rotações até
+                ~2400 RPM mantêm a banda 5x dentro do espectro confiável
+                (requisitos v2.2, §Nyquist). Configurado por equipamento no
+                boot; não há autodetecção de f0 (decisão travada).
+    endmenu
+
+endmenu

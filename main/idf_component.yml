@@ -1,0 +1,7 @@
+dependencies:
+  rinku404/bno085:
+    version: 1.2.0
+  # esp-dsp é declarado em components/signal_processing/idf_component.yml
+  # (consumidor direto da FFT) e resolvido transitivamente para este projeto.
+description: Basic example demonstrating BNO085 sensor data acquisition
+version: 1.2.0

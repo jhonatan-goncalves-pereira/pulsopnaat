@@ -1,0 +1,6 @@
+# Defaults do app de teste on-target (PulsoPNAAT).
+#
+# Stack da task main: os runners Unity + printf precisam de folga; o corpus
+# usa buffers grandes em static (janela_t ~4,8 KB), mas 3,5 KB (default do IDF)
+# ainda é pouco para o quadro do runner + Unity. 8 KB cobre com folga.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
