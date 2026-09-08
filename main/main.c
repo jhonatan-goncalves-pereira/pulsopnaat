@@ -55,6 +55,11 @@ static const char *TAG = "app_main";
 /* Orçamento de processamento: a própria janela (1 s). RNF01. */
 #define RNF01_LIMITE_US 1000000LL
 
+/* Conectividade roda em contexto de aplicação (core 1, prioridade baixa). */
+#define TAREFA_CONECTIVIDADE_CORE 1
+#define TAREFA_CONECTIVIDADE_PRIORIDADE 2
+#define TAREFA_CONECTIVIDADE_STACK 4096
+
 static QueueHandle_t s_fila_janelas;
 
 /* Baseline vigente + acumulador da calibração — só a task de processamento
@@ -114,13 +119,46 @@ static void processar_linha(const char *linha)
     printf("comandos: calibrar | status\n");
 }
 
+/* Conectividade (item 7): o callback WiFi roda na task do loop de eventos —
+ * não pode bloquear nem chamar MQTT direto. Ele só sinaliza; esta task
+ * (contexto de aplicação) inicia o MQTT e publica os eventos da máquina. */
+static TaskHandle_t s_conectividade_task = NULL;
+static volatile bool s_wifi_tem_ip = false;
+static bool s_mqtt_iniciado = false;
+
+static void tarefa_conectividade(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        if (s_wifi_tem_ip && !s_mqtt_iniciado) {
+            ESP_LOGI(TAG, "WiFi com IP — iniciando cliente MQTT (task de aplicação)...");
+            if (mqtt_client_start() == ESP_OK) {
+                s_mqtt_iniciado = true;
+            } else {
+                ESP_LOGW(TAG, "mqtt_client_start falhou — tenta de novo no próximo GOT_IP");
+            }
+        }
+    }
+}
+
 static void wifi_state_changed(wifi_state_t state)
 {
+    /* Contexto: loop de eventos ESP. Apenas ops não-bloqueantes aqui. */
     if (state == WIFI_STATE_GOT_IP) {
-        ESP_LOGI(TAG, "WiFi conectado com IP. Iniciando cliente MQTT...");
-        mqtt_client_start();
+        s_wifi_tem_ip = true;
+        alerta_servico_publicar_evento(EVENTO_WIFI_RESTAURADO);
+        if (s_conectividade_task != NULL) {
+            xTaskNotifyGive(s_conectividade_task);
+        }
     } else if (state == WIFI_STATE_DISCONNECTED) {
+        s_wifi_tem_ip = false;
         ESP_LOGW(TAG, "WiFi desconectado. Tentando reconectar...");
+        alerta_servico_publicar_evento(EVENTO_WIFI_CAIR);
+    } else if (state == WIFI_STATE_FAILED) {
+        s_wifi_tem_ip = false;
+        ESP_LOGE(TAG, "WiFi falhou (MAX_RETRY) — máquina em CONTINGÊNCIA até novo wifi_config_start()");
+        alerta_servico_publicar_evento(EVENTO_WIFI_CAIR);
     }
 }
 
@@ -313,6 +351,14 @@ void app_main(void)
     ESP_ERROR_CHECK(mqtt_client_init());
     mqtt_client_register_state_callback(mqtt_state_changed);
     mqtt_client_register_data_callback(mqtt_data_received);
+    if (xTaskCreatePinnedToCore(tarefa_conectividade, "conectividade",
+                                TAREFA_CONECTIVIDADE_STACK, NULL,
+                                TAREFA_CONECTIVIDADE_PRIORIDADE,
+                                &s_conectividade_task,
+                                TAREFA_CONECTIVIDADE_CORE) != pdPASS) {
+        ESP_LOGE(TAG, "falha ao criar task de conectividade");
+        return;
+    }
     ESP_ERROR_CHECK(wifi_config_start());
 
     ESP_ERROR_CHECK(alerta_servico_iniciar());

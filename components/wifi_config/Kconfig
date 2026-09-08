@@ -1,22 +1,53 @@
 menu "WiFi Configuration"
+
     config WIFI_SSID
         string "WiFi SSID"
         default ""
-        help "SSID of the WiFi network to connect to"
-    
+        help
+            SSID of the WiFi network to connect to.
+
     config WIFI_PASSWORD
         string "WiFi Password"
         default ""
-        help "Password of the WiFi network"
-    
+        help
+            Password of the WiFi network.
+
     config WIFI_MAX_RETRY
         int "Maximum Retry Count"
         default 5
-        help "Maximum number of reconnection attempts"
-    
-    config WIFI_AUTH_THRESHOLD
-        int "Authentication Mode"
-        default 3
-        range 0 6
-        help "WiFi authentication threshold (0=OPEN, 1=WEP, 2=WPA_PSK, 3=WPA2_PSK, 4=WPA_WPA2_PSK, 5=WPA2_ENTERPRISE, 6=WPA3_PSK)"
+        range 0 100
+        help
+            Maximum number of reconnection attempts before
+            reporting WIFI_STATE_FAILED.
+
+    choice WIFI_AUTH_THRESHOLD
+        prompt "Minimum Authentication Mode"
+        default WIFI_AUTH_OPEN
+        help
+            Minimum AP auth mode accepted (threshold). APs below
+            it are rejected. OPEN accepts any AP.
+
+        config WIFI_AUTH_OPEN
+            bool "OPEN (accept any AP)"
+
+        config WIFI_AUTH_WEP
+            bool "WEP"
+
+        config WIFI_AUTH_WPA_PSK
+            bool "WPA_PSK"
+
+        config WIFI_AUTH_WPA2_PSK
+            bool "WPA2_PSK"
+
+        config WIFI_AUTH_WPA_WPA2_PSK
+            bool "WPA_WPA2_PSK"
+
+        config WIFI_AUTH_WPA2_ENTERPRISE
+            bool "WPA2_ENTERPRISE"
+
+        config WIFI_AUTH_WPA3_PSK
+            bool "WPA3_PSK"
+
+    endchoice
+
 endmenu

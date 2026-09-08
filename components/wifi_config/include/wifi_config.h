@@ -1,13 +1,32 @@
 #ifndef WIFI_CONFIG_H
 #define WIFI_CONFIG_H
 
+#include <stdbool.h>
+
+#include "esp_err.h"
 #include "esp_wifi.h"
 
 // Configurações WiFi
 #define WIFI_CONFIG_SSID          CONFIG_WIFI_SSID
 #define WIFI_CONFIG_PASSWORD      CONFIG_WIFI_PASSWORD
 #define WIFI_CONFIG_MAX_RETRY     CONFIG_WIFI_MAX_RETRY
-#define WIFI_CONFIG_AUTH_THRESHOLD CONFIG_WIFI_AUTH_THRESHOLD
+#if defined(CONFIG_WIFI_AUTH_OPEN)
+#define WIFI_CONFIG_AUTH_THRESHOLD WIFI_AUTH_OPEN
+#elif defined(CONFIG_WIFI_AUTH_WEP)
+#define WIFI_CONFIG_AUTH_THRESHOLD WIFI_AUTH_WEP
+#elif defined(CONFIG_WIFI_AUTH_WPA_PSK)
+#define WIFI_CONFIG_AUTH_THRESHOLD WIFI_AUTH_WPA_PSK
+#elif defined(CONFIG_WIFI_AUTH_WPA2_PSK)
+#define WIFI_CONFIG_AUTH_THRESHOLD WIFI_AUTH_WPA2_PSK
+#elif defined(CONFIG_WIFI_AUTH_WPA_WPA2_PSK)
+#define WIFI_CONFIG_AUTH_THRESHOLD WIFI_AUTH_WPA_WPA2_PSK
+#elif defined(CONFIG_WIFI_AUTH_WPA2_ENTERPRISE)
+#define WIFI_CONFIG_AUTH_THRESHOLD WIFI_AUTH_WPA2_ENTERPRISE
+#elif defined(CONFIG_WIFI_AUTH_WPA3_PSK)
+#define WIFI_CONFIG_AUTH_THRESHOLD WIFI_AUTH_WPA3_PSK
+#else
+#define WIFI_CONFIG_AUTH_THRESHOLD WIFI_AUTH_OPEN
+#endif
 
 // Estados da conexão WiFi
 typedef enum {
@@ -18,7 +37,15 @@ typedef enum {
     WIFI_STATE_FAILED
 } wifi_state_t;
 
-// Callback para notificação de estado
+// Callback para notificação de estado.
+//
+// ATENÇÃO DE CONTEXTO: o callback roda na task do loop de eventos ESP
+// (system event task), não em task da aplicação. Ele NÃO deve bloquear,
+// esperar em fila/mutex com timeout, nem chamar APIs bloqueantes de rede
+// (ex.: mqtt_client_start(), esp_wifi_* bloqueantes). Faça apenas log,
+// escrita atômica/flag e notificação não-bloqueante (xTaskNotifyGive,
+// xQueueSend com timeout 0, alerta_servico_publicar_evento) e deixe o
+// trabalho pesado para uma task da aplicação.
 typedef void (*wifi_state_callback_t)(wifi_state_t state);
 
 /**
