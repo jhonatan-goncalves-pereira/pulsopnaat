@@ -81,4 +81,13 @@ menu "PulsoPNAAT"
                 boot; não há autodetecção de f0 (decisão travada).
     endmenu
 
+    menu "Conectividade (MQTT)"
+        config PULSOPNAAT_NODE_ID
+            string "Identificação do nó (campo node do JSON)"
+            default "pulsopnaat-01"
+            help
+                Identificador lógico do nó no payload MQTT (RF05). Placeholder
+                estático até o provisionamento por MAC/Kconfig por dispositivo.
+    endmenu
+
 endmenu
