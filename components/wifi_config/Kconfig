@@ -1,0 +1,22 @@
+menu "WiFi Configuration"
+    config WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help "SSID of the WiFi network to connect to"
+    
+    config WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+        help "Password of the WiFi network"
+    
+    config WIFI_MAX_RETRY
+        int "Maximum Retry Count"
+        default 5
+        help "Maximum number of reconnection attempts"
+    
+    config WIFI_AUTH_THRESHOLD
+        int "Authentication Mode"
+        default 3
+        range 0 6
+        help "WiFi authentication threshold (0=OPEN, 1=WEP, 2=WPA_PSK, 3=WPA2_PSK, 4=WPA_WPA2_PSK, 5=WPA2_ENTERPRISE, 6=WPA3_PSK)"
+endmenu
