@@ -1,7 +1,7 @@
 #ifndef MQTT_CLIENT_H
 #define MQTT_CLIENT_H
 
-#include "esp_mqtt_client.h"
+#include "mqtt_client.h"
 #include <stdbool.h>
 
 // Configurações MQTT

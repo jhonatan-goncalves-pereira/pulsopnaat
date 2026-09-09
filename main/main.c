@@ -5,7 +5,14 @@
  * Pipeline: BNO085 → vibration_sensor (amostragem, core 0) → fila janela_t →
  * processamento (core 1): Hampel + analisar_janela (RMS, Hann, FFT-512,
  * harmônicos, kurtosis, THD) → baseline (30 janelas, Welford) ou classificação
- * 3σ/6σ (votação por eixo, pior eixo) → alerta_servico (LED/buzzer) + MQTT.
+ * 3σ/6σ (votação por eixo, pior eixo) → fila alerta_evento_t → conectividade
+ * (core 1): formata (mqtt_payloads, puro) e publica via MQTT.
+ * Sinalização local: alerta_servico (LED/buzzer).
+ *
+ * Direção das dependências: o processamento NUNCA chama MQTT; os callbacks
+ * MQTT/WiFi NUNCA chamam MQTT nem tocam a classificação — só enfileiram
+ * (comandos) ou sinalizam (conectividade). A task de conectividade é o único
+ * ponto que junta estado (alerta_servico) + transporte (mqtt_client).
  *
  * Calibração SEMPRE comandada (botão/serial/MQTT — RF08), nunca automática no
  * boot; o nó só entra em MONITORANDO com baseline válido.
@@ -31,10 +38,11 @@
 #include "baseline.h"
 #include "baseline_nvs.h"
 #include "i2c_config.h"
+#include "mqtt_payloads.h"
 #include "signal_processing.h"
 #include "vibration_sensor.h"
 #include "wifi_config.h"
-#include "mqtt_client.h"
+#include "pnaat_mqtt_client.h"
 
 static const char *TAG = "app_main";
 
@@ -55,36 +63,59 @@ static const char *TAG = "app_main";
 /* Orçamento de processamento: a própria janela (1 s). RNF01. */
 #define RNF01_LIMITE_US 1000000LL
 
+/* Conectividade roda em contexto de aplicação (core 1, prioridade baixa). */
+#define TAREFA_CONECTIVIDADE_CORE 1
+#define TAREFA_CONECTIVIDADE_PRIORIDADE 2
+#define TAREFA_CONECTIVIDADE_STACK 4096
+/* Poll da conectividade: drena comandos + alertas e trata o start do MQTT.
+ * 100 ms acompanha o tick de LED sem atrasar o anúncio de alertas. */
+#define CONECTIVIDADE_POLL_MS 100
+/* JSON de alerta/status cabe em ~150 B; folga para node id longo. */
+#define PAYLOAD_BUF_TAM 192
+/* Profundidade das filas internas da conectividade. Fila cheia → item mais
+ * novo descartado com log (publicação/tratamento nunca bloqueia DSP nem o
+ * callback MQTT, RNF02). Valores estáticos: nunca se mostrou necessário
+ * ajustá-los por equipamento. */
+#define FILA_ALERTAS_PROFUNDIDADE 4
+#define FILA_COMANDOS_PROFUNDIDADE 4
+
+/* Evento de classificação (processamento → conectividade, item 1): o DSP
+ * nunca formata nem publica — só classifica e enfileira (non-blocking). */
+typedef struct {
+    estado_equipamento_t estado;
+    metricas_t metricas;
+    int64_t ts_us; /* esp_timer_get_time() na classificação */
+} alerta_evento_t;
+
+/* Comando de rede (callback MQTT → conectividade, item 2): o callback só
+ * enfileira; quem interpreta e age é a task de aplicação. */
+typedef enum {
+    COMANDO_REDE_CALIBRAR = 0,
+    COMANDO_REDE_STATUS,
+} comando_rede_tipo_t;
+
+typedef struct {
+    comando_rede_tipo_t tipo;
+} comando_rede_t;
+
 static QueueHandle_t s_fila_janelas;
+static QueueHandle_t s_fila_alertas;
+static QueueHandle_t s_fila_comandos;
 
 /* Baseline vigente + acumulador da calibração — só a task de processamento
  * toca (single-consumer, como o buffer de janela). */
 static baseline_t s_baseline;
 static baseline_calibracao_t s_calibracao;
-static bool s_baseline_presente;
+/* Flag informativa lida pela conectividade/serial e escrita só pelo
+ * processamento (após o init no app_main): bool alinhado, escrita atômica na
+ * prática; atraso de ms na visibilidade é inofensivo ao status. */
+static volatile bool s_baseline_presente;
 
 /* ------------------------- auxiliares de log ---------------------------- */
-
-static const char *nome_estado_maquina(estado_maquina_t e)
-{
-    switch (e) {
-    case ESTADO_MAQ_BOOT: return "BOOT";
-    case ESTADO_MAQ_CALIBRANDO: return "CALIBRANDO";
-    case ESTADO_MAQ_MONITORANDO: return "MONITORANDO";
-    case ESTADO_MAQ_CONTINGENCIA: return "CONTINGENCIA";
-    default: return "?";
-    }
-}
-
-static const char *nome_estado_equipamento(estado_equipamento_t e)
-{
-    switch (e) {
-    case ESTADO_EQUIP_VERDE: return "verde (normal)";
-    case ESTADO_EQUIP_AMARELO: return "amarelo (atenção)";
-    case ESTADO_EQUIP_VERMELHO: return "vermelho (crítico)";
-    default: return "?";
-    }
-}
+/* Nomes de estado do protocolo/log vivem no módulo puro mqtt_payloads
+ * (cobertos pelo corpus on-target); aqui só um alias curto. */
+#define nome_estado_maquina(e) mqtt_nome_estado_maquina(e)
+#define nome_estado_equipamento(e) mqtt_nome_estado_equipamento(e)
 
 /* --------------------------- task de comandos ---------------------------- */
 
@@ -114,40 +145,142 @@ static void processar_linha(const char *linha)
     printf("comandos: calibrar | status\n");
 }
 
+/* Conectividade: callbacks WiFi/MQTT rodam em tasks do stack (loop de eventos
+ * ESP / task esp-mqtt) — não podem bloquear nem chamar MQTT direto. Eles só
+ * sinalizam/enfileiram (non-blocking); esta task (contexto de aplicação) é o
+ * ÚNICO ponto que junta estado (alerta_servico) + transporte (mqtt_client):
+ * inicia o MQTT, trata comandos e publica alertas/status. */
+static TaskHandle_t s_conectividade_task = NULL;
+static volatile bool s_wifi_tem_ip = false;
+static bool s_mqtt_iniciado = false;
+/* SUBSCRIBED visto no callback; o anúncio "online" é publicado aqui. */
+static volatile bool s_mqtt_anunciar_online = false;
+
+static void publicar_status_atual(void)
+{
+    char buf[PAYLOAD_BUF_TAM];
+    const size_t n = mqtt_formatar_status(
+        buf, sizeof(buf), CONFIG_PULSOPNAAT_NODE_ID,
+        alerta_servico_estado_maquina(), alerta_servico_estado_equipamento(),
+        s_baseline_presente, (int64_t)(esp_timer_get_time() / 1000000LL));
+    if (n == 0) {
+        ESP_LOGW(TAG, "status não formatado — payload descartado");
+        return;
+    }
+    if (mqtt_client_publish(MQTT_TOPIC_STATUS, buf, 0, 1) < 0) {
+        ESP_LOGW(TAG, "status não publicado (MQTT desconectado?)");
+    }
+}
+
+static void publicar_alerta(const alerta_evento_t *ev)
+{
+    char buf[PAYLOAD_BUF_TAM];
+    const size_t n = mqtt_formatar_alerta(
+        buf, sizeof(buf), CONFIG_PULSOPNAAT_NODE_ID,
+        ev->ts_us, ev->estado, &ev->metricas);
+    if (n == 0) {
+        ESP_LOGW(TAG, "alerta não formatado — descartado");
+        return;
+    }
+    if (mqtt_client_publish(MQTT_TOPIC_ALERT, buf, 0, 1) < 0) {
+        /* Sem buffer de contingência ainda (RF07, gap registrado): o alerta
+         * é perdido; o log marca a perda para a PoC. */
+        ESP_LOGW(TAG, "alerta descartado (MQTT desconectado, sem buffer): %s", buf);
+    }
+}
+
+static void tratar_comando_rede(const comando_rede_t *cmd)
+{
+    if (cmd->tipo == COMANDO_REDE_CALIBRAR) {
+        ESP_LOGI(TAG, "comando MQTT: calibrar (máquina em %s)",
+                 nome_estado_maquina(alerta_servico_estado_maquina()));
+        alerta_servico_publicar_evento(EVENTO_INICIAR_CALIBRACAO);
+    } else {
+        publicar_status_atual();
+    }
+}
+
+static void tarefa_conectividade(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(CONECTIVIDADE_POLL_MS));
+        if (s_wifi_tem_ip && !s_mqtt_iniciado) {
+            ESP_LOGI(TAG, "WiFi com IP — iniciando cliente MQTT (task de aplicação)...");
+            if (mqtt_client_start() == ESP_OK) {
+                s_mqtt_iniciado = true;
+            } else {
+                ESP_LOGW(TAG, "mqtt_client_start falhou — tenta de novo no próximo GOT_IP");
+            }
+        }
+        if (s_mqtt_anunciar_online) {
+            s_mqtt_anunciar_online = false;
+            ESP_LOGI(TAG, "MQTT conectado e inscrito nos tópicos. Sistema online.");
+            publicar_status_atual();
+        }
+        comando_rede_t cmd;
+        while (xQueueReceive(s_fila_comandos, &cmd, 0) == pdTRUE) {
+            tratar_comando_rede(&cmd);
+        }
+        alerta_evento_t ev;
+        while (xQueueReceive(s_fila_alertas, &ev, 0) == pdTRUE) {
+            publicar_alerta(&ev);
+        }
+    }
+}
+
 static void wifi_state_changed(wifi_state_t state)
 {
+    /* Contexto: loop de eventos ESP. Apenas ops não-bloqueantes aqui. */
     if (state == WIFI_STATE_GOT_IP) {
-        ESP_LOGI(TAG, "WiFi conectado com IP. Iniciando cliente MQTT...");
-        mqtt_client_start();
+        s_wifi_tem_ip = true;
+        alerta_servico_publicar_evento(EVENTO_WIFI_RESTAURADO);
+        if (s_conectividade_task != NULL) {
+            xTaskNotifyGive(s_conectividade_task);
+        }
     } else if (state == WIFI_STATE_DISCONNECTED) {
+        s_wifi_tem_ip = false;
         ESP_LOGW(TAG, "WiFi desconectado. Tentando reconectar...");
+        alerta_servico_publicar_evento(EVENTO_WIFI_CAIR);
+    } else if (state == WIFI_STATE_FAILED) {
+        s_wifi_tem_ip = false;
+        ESP_LOGE(TAG, "WiFi falhou (MAX_RETRY) — máquina em CONTINGÊNCIA até novo wifi_config_start()");
+        alerta_servico_publicar_evento(EVENTO_WIFI_CAIR);
     }
 }
 
 static void mqtt_state_changed(mqtt_client_state_t state)
 {
+    /* Contexto: task esp-mqtt. Só sinaliza; o anúncio sai na conectividade. */
     if (state == MQTT_CLIENT_STATE_SUBSCRIBED) {
-        ESP_LOGI(TAG, "MQTT conectado e inscrito nos tópicos. Sistema online.");
-        char status_msg[128];
-        snprintf(status_msg, sizeof(status_msg), "{\"status\":\"online\",\"baseline\":\"%s\"}", s_baseline_presente ? "presente" : "ausente");
-        mqtt_client_publish(MQTT_TOPIC_STATUS, status_msg, 0, 1);
+        s_mqtt_anunciar_online = true;
+        if (s_conectividade_task != NULL) {
+            xTaskNotifyGive(s_conectividade_task);
+        }
+    }
+}
+
+static void mqtt_enfileirar_comando(comando_rede_tipo_t tipo)
+{
+    const comando_rede_t cmd = { .tipo = tipo };
+    if (xQueueSend(s_fila_comandos, &cmd, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "fila de comandos cheia — comando MQTT descartado");
+    } else if (s_conectividade_task != NULL) {
+        xTaskNotifyGive(s_conectividade_task);
     }
 }
 
 static void mqtt_data_received(const char *topic, const char *data, int data_len)
 {
+    /* Contexto: task esp-mqtt (via mqtt_event_handler, payload já com NUL).
+     * Comparação por comprimento exato: "calibrar\\n"/"status " não disparam. */
     ESP_LOGI(TAG, "Comando MQTT recebido em %s: %.*s", topic, data_len, data);
-    
-    if (strncasecmp(data, "calibrar", data_len) == 0) {
-        ESP_LOGI(TAG, "Acionando calibração via MQTT");
-        alerta_servico_publicar_evento(EVENTO_INICIAR_CALIBRACAO);
-    } else if (strncasecmp(data, "status", data_len) == 0) {
-        char status_msg[256];
-        snprintf(status_msg, sizeof(status_msg), "{\"maquina\":\"%s\",\"equipamento\":\"%s\",\"baseline\":%s}",
-                 nome_estado_maquina(alerta_servico_estado_maquina()),
-                 nome_estado_equipamento(alerta_servico_estado_equipamento()),
-                 s_baseline_presente ? "true" : "false");
-        mqtt_client_publish(MQTT_TOPIC_STATUS, status_msg, 0, 1);
+    if (data_len == 8 && strncasecmp(data, "calibrar", 8) == 0) {
+        mqtt_enfileirar_comando(COMANDO_REDE_CALIBRAR);
+    } else if (data_len == 6 && strncasecmp(data, "status", 6) == 0) {
+        mqtt_enfileirar_comando(COMANDO_REDE_STATUS);
+    } else {
+        ESP_LOGW(TAG, "comando MQTT desconhecido — ignorado (calibrar | status)");
     }
 }
 
@@ -268,15 +401,23 @@ static void tarefa_processamento(void *arg)
             const estado_equipamento_t novo = alerta_classificar_janela(&s_baseline, &metricas);
             const estado_equipamento_t anterior = alerta_servico_estado_equipamento();
             const estado_equipamento_t efetivo = alerta_servico_definir_estado_equipamento(novo);
-            
+
             if (efetivo != anterior) {
                 ESP_LOGI(TAG, "estado do equipamento: %s → %s", nome_estado_equipamento(anterior), nome_estado_equipamento(efetivo));
-                
+
                 if (efetivo == ESTADO_EQUIP_AMARELO || efetivo == ESTADO_EQUIP_VERMELHO) {
-                    char alert_msg[160];
-                    snprintf(alert_msg, sizeof(alert_msg), "{\"estado\":\"%s\",\"rms_x\":%.4f,\"rms_y\":%.4f,\"rms_z\":%.4f}",
-                             nome_estado_equipamento(efetivo), metricas.rms[EIXO_X], metricas.rms[EIXO_Y], metricas.rms[EIXO_Z]);
-                    mqtt_client_publish(MQTT_TOPIC_ALERT, alert_msg, 0, 1);
+                    /* Política vigente: publica só na transição confirmada
+                     * (menos tráfego que o RF04 literal "sempre que for
+                     * atenção/crítico"). O transporte sai na conectividade —
+                     * aqui só enfileira, sem bloquear o DSP (RNF02). */
+                    const alerta_evento_t ev = {
+                        .estado = efetivo,
+                        .metricas = metricas,
+                        .ts_us = esp_timer_get_time(),
+                    };
+                    if (xQueueSend(s_fila_alertas, &ev, 0) != pdTRUE) {
+                        ESP_LOGW(TAG, "fila de alertas cheia — alerta descartado");
+                    }
                 }
             }
             break;
@@ -307,12 +448,37 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(err);
 
+    /* Filas antes de qualquer task/callback que as use. */
+    s_fila_janelas = xQueueCreate(CONFIG_PULSOPNAAT_FILA_JANELAS, sizeof(janela_t));
+    if (s_fila_janelas == NULL) {
+        ESP_LOGE(TAG, "falha ao criar fila de janelas");
+        return;
+    }
+    s_fila_alertas = xQueueCreate(FILA_ALERTAS_PROFUNDIDADE, sizeof(alerta_evento_t));
+    if (s_fila_alertas == NULL) {
+        ESP_LOGE(TAG, "falha ao criar fila de alertas");
+        return;
+    }
+    s_fila_comandos = xQueueCreate(FILA_COMANDOS_PROFUNDIDADE, sizeof(comando_rede_t));
+    if (s_fila_comandos == NULL) {
+        ESP_LOGE(TAG, "falha ao criar fila de comandos");
+        return;
+    }
+
     ESP_LOGI(TAG, "Inicializando WiFi e MQTT...");
     ESP_ERROR_CHECK(wifi_config_init());
     wifi_config_register_callback(wifi_state_changed);
     ESP_ERROR_CHECK(mqtt_client_init());
     mqtt_client_register_state_callback(mqtt_state_changed);
     mqtt_client_register_data_callback(mqtt_data_received);
+    if (xTaskCreatePinnedToCore(tarefa_conectividade, "conectividade",
+                                TAREFA_CONECTIVIDADE_STACK, NULL,
+                                TAREFA_CONECTIVIDADE_PRIORIDADE,
+                                &s_conectividade_task,
+                                TAREFA_CONECTIVIDADE_CORE) != pdPASS) {
+        ESP_LOGE(TAG, "falha ao criar task de conectividade");
+        return;
+    }
     ESP_ERROR_CHECK(wifi_config_start());
 
     ESP_ERROR_CHECK(alerta_servico_iniciar());
@@ -326,12 +492,6 @@ void app_main(void)
         ESP_LOGI(TAG, "sem baseline na NVS — aguardando comando de calibração");
     } else {
         ESP_LOGW(TAG, "baseline na NVS ilegível (%s)", esp_err_to_name(err));
-    }
-
-    s_fila_janelas = xQueueCreate(CONFIG_PULSOPNAAT_FILA_JANELAS, sizeof(janela_t));
-    if (s_fila_janelas == NULL) {
-        ESP_LOGE(TAG, "falha ao criar fila de janelas");
-        return;
     }
 
     i2c_master_bus_handle_t bus_handle = NULL;

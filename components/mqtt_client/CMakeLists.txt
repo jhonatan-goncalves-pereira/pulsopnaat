@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "mqtt_client.c"
+    SRCS "pnaat_mqtt_client.c" "mqtt_payloads.c"
     INCLUDE_DIRS "include"
-    REQUIRES mqtt
+    REQUIRES mqtt signal_processing alert_manager
 )

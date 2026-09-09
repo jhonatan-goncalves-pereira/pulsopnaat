@@ -15,6 +15,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/../components/signal_processing"
     "${CMAKE_CURRENT_LIST_DIR}/../components/baseline"
-    "${CMAKE_CURRENT_LIST_DIR}/../components/alert_manager")
+    "${CMAKE_CURRENT_LIST_DIR}/../components/alert_manager"
+    "${CMAKE_CURRENT_LIST_DIR}/../components/mqtt_client")
 
 project(test_app)
