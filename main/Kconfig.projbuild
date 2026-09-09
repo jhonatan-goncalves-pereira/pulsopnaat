@@ -15,12 +15,15 @@ menu "PulsoPNAAT"
 
         config APP_BNO085_I2C_ADDR
             hex "BNO085 I2C Address"
-            default 0x28
+            default 0x4A
             range 0x00 0x7F
             help
                 Endereço I2C de 7 bits do BNO085 no barramento:
-                0x28 quando AD0=GND, 0x29 quando AD0=VCC
-                (wiring do Heltec LoRa V3 no README do driver: AD0→GND → 0x28).
+                0x4A quando SA0/AD0=GND, 0x4B quando SA0/AD0=VCC
+                (datasheet BNO085). ATENÇÃO: 0x28/0x29 são endereços do
+                BNO055, não do BNO085 — com o módulo GY-BNO085 do kit,
+                ligado à Heltec LoRa V3, o endereço observado é 0x4A;
+                0x28 não responde (NACK) nesse setup.
 
         config APP_BNO085_I2C_FREQ_HZ
             int "I2C Clock Frequency (Hz)"
