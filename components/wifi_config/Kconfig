@@ -17,15 +17,13 @@ menu "WiFi Configuration"
         default 5
         range 0 100
         help
-            Maximum number of reconnection attempts before
-            reporting WIFI_STATE_FAILED.
+            Maximum number of reconnection attempts before reporting WIFI_STATE_FAILED.
 
     choice WIFI_AUTH_THRESHOLD
         prompt "Minimum Authentication Mode"
-        default WIFI_AUTH_OPEN
+        default WIFI_AUTH_WPA2_PSK
         help
-            Minimum AP auth mode accepted (threshold). APs below
-            it are rejected. OPEN accepts any AP.
+            Minimum AP auth mode accepted (threshold). APs below it are rejected.
 
         config WIFI_AUTH_OPEN
             bool "OPEN (accept any AP)"
