@@ -1,0 +1,77 @@
+# Configuração do componente storage (PulsoPNAAT, RF12/RNF09 — microSD + RTC).
+#
+# Kconfig DE COMPONENTE (não Kconfig.projbuild em main/): mesmo padrão do
+# alert_manager — os símbolos existem em qualquer projeto que inclua o
+# componente (firmware principal e test_app).
+#
+# Pinagem SPI do módulo microSD do Kit Maker (Figura 01 do documento de
+# requisitos): módulo é BARE (sem regulador on-board) — alimentar em 3V3,
+# NUNCA 5V. O pino MISO do módulo costuma vir serigrafado "MOSO" — atenção
+# ao ligar.
+
+menu "PulsoPNAAT: Armazenamento (microSD + RTC DS3231)"
+
+    config PULSOPNAAT_SD_SPI_SCK_GPIO
+        int "microSD SPI SCK GPIO"
+        default 33
+
+    config PULSOPNAAT_SD_SPI_MOSI_GPIO
+        int "microSD SPI MOSI GPIO"
+        default 34
+
+    config PULSOPNAAT_SD_SPI_MISO_GPIO
+        int "microSD SPI MISO GPIO (silk \"MOSO\" no módulo)"
+        default 47
+
+    config PULSOPNAAT_SD_SPI_CS_GPIO
+        int "microSD SPI CS GPIO"
+        default 48
+
+    config PULSOPNAAT_SD_MOUNT_POINT
+        string "Ponto de montagem FATFS"
+        default "/sdcard"
+        help
+            Caminho VFS onde o cartão é montado. Os arquivos de log ficam em
+            <ponto de montagem>/<PULSOPNAAT_LOG_DIR>/.
+
+    config PULSOPNAAT_LOG_DIR
+        string "Subdiretório de logs no cartão"
+        default "pulso"
+
+    config PULSOPNAAT_LOG_ROTACAO_MIN
+        int "Rotação do CSV por tempo (minutos)"
+        default 15
+        range 1 1440
+        help
+            Cada arquivo cobre no máximo este intervalo de tempo; ao vencer,
+            a task de storage fecha o arquivo atual e abre um novo (nomeado
+            pelo timestamp do RTC — log_AAAAMMDD_HHMMSS.csv — ou pelo uptime
+            em ms se o RTC não estiver disponível).
+
+            Isso é COMPLEMENTAR ao RF12 (log persistente, append, sobrevive a
+            reboot) — a sequência de arquivos no cartão É o histórico
+            completo; a rotação só limita o tamanho de CADA arquivo, o que
+            torna a importação em ferramentas como Grafana (datasource
+            CSV/Infinity) prática, sem reprocessar o cartão inteiro a cada
+            consulta.
+
+    config PULSOPNAAT_LOG_FILA_PROFUNDIDADE
+        int "Profundidade da fila de escrita (registros pendentes)"
+        default 8
+        range 2 32
+        help
+            RNF09: a escrita no SD roda em task DEDICADA de baixa
+            prioridade, alimentada por esta fila — nunca bloqueia a
+            amostragem nem o processamento. Fila cheia (ex.: latência de
+            wear-leveling do cartão) → registro mais novo é descartado,
+            contabilizado em log agregado (não por item).
+
+    config PULSOPNAAT_RTC_I2C_ADDR
+        hex "Endereço I2C do RTC DS3231"
+        default 0x68
+        range 0x00 0x7F
+        help
+            DS3231 no MESMO barramento I2C do BNO085 (SDA/SCL definidos em
+            "I2C & GPIO (BNO085)"), endereço fixo de fábrica 0x68.
+
+endmenu
