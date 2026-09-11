@@ -1,0 +1,244 @@
+<svg viewBox="0 0 1200 900" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1120"/>
+      <stop offset="55%" stop-color="#0d1b2e"/>
+      <stop offset="100%" stop-color="#0a1120"/>
+    </linearGradient>
+
+    <linearGradient id="board" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#132842"/>
+      <stop offset="100%" stop-color="#0c1d33"/>
+    </linearGradient>
+
+    <linearGradient id="cardI2C" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f3d33"/>
+      <stop offset="100%" stop-color="#0a2a24"/>
+    </linearGradient>
+    <linearGradient id="cardSPI" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2a1f4d"/>
+      <stop offset="100%" stop-color="#1c1536"/>
+    </linearGradient>
+    <linearGradient id="cardOUT" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4a2a12"/>
+      <stop offset="100%" stop-color="#331d0c"/>
+    </linearGradient>
+    <linearGradient id="cardIN" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4a1f1f"/>
+      <stop offset="100%" stop-color="#331515"/>
+    </linearGradient>
+
+    <filter id="glowTeal" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowPurple" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowAmber" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="glowRed" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+    <filter id="boardShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
+
+    <radialGradient id="dot" cx="35%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="900" fill="url(#bg)"/>
+
+  <!-- textura de fundo: grade sutil tipo PCB -->
+  <g opacity="0.05" stroke="#7fd8c8" stroke-width="1">
+    <path d="M0,150 H1200 M0,300 H1200 M0,450 H1200 M0,600 H1200 M0,750 H1200"/>
+    <path d="M150,0 V900 M300,0 V900 M450,0 V900 M600,0 V900 M750,0 V900 M900,0 V900 M1050,0 V900"/>
+  </g>
+
+  <!-- ===================== TÍTULO ===================== -->
+  <text x="600" y="58" text-anchor="middle" font-size="34" font-weight="700" fill="#eaf6ff" letter-spacing="0.5">
+    PulsoPNAAT <tspan fill="#57d9c4">·</tspan> Pinout
+  </text>
+  <text x="600" y="86" text-anchor="middle" font-size="15" fill="#7f95ad" letter-spacing="1.5">
+    ESP32-S3 · HELTEC WIFI LORA 32 V3 · GRUPO TCC 14 · PNAAT 2026
+  </text>
+
+  <!-- ===================== TRILHAS (por trás dos cards/board) ===================== -->
+  <g fill="none" stroke-linecap="round">
+    <!-- BNO085 -> board (I2C, teal) -->
+    <path d="M 300,178 C 400,178 400,300 470,340" stroke="#3ee8c8" stroke-width="2.5" filter="url(#glowTeal)"/>
+    <!-- RTC -> board (I2C, teal) -->
+    <path d="M 300,398 C 400,398 400,398 470,400" stroke="#3ee8c8" stroke-width="2.5" filter="url(#glowTeal)"/>
+    <!-- Botão -> board (GPIO in, âmbar) -->
+    <path d="M 300,618 C 400,618 400,480 470,460" stroke="#ffb84d" stroke-width="2.5" filter="url(#glowAmber)"/>
+
+    <!-- microSD -> board (SPI, roxo) -->
+    <path d="M 900,178 C 800,178 800,300 730,340" stroke="#b58cff" stroke-width="2.5" filter="url(#glowPurple)"/>
+    <!-- LED -> board (GPIO out, vermelho/multi) -->
+    <path d="M 900,398 C 800,398 800,398 730,400" stroke="#ff6b6b" stroke-width="2.5" filter="url(#glowRed)"/>
+    <!-- Buzzer -> board (GPIO out, âmbar) -->
+    <path d="M 900,618 C 800,618 800,480 730,460" stroke="#ffb84d" stroke-width="2.5" filter="url(#glowAmber)"/>
+  </g>
+
+  <!-- pontinhos de solda nas duas pontas de cada trilha -->
+  <g fill="#eaf6ff">
+    <circle cx="300" cy="178" r="3.5"/><circle cx="470" cy="340" r="3.5"/>
+    <circle cx="300" cy="398" r="3.5"/><circle cx="470" cy="400" r="3.5"/>
+    <circle cx="300" cy="618" r="3.5"/><circle cx="470" cy="460" r="3.5"/>
+    <circle cx="900" cy="178" r="3.5"/><circle cx="730" cy="340" r="3.5"/>
+    <circle cx="900" cy="398" r="3.5"/><circle cx="730" cy="400" r="3.5"/>
+    <circle cx="900" cy="618" r="3.5"/><circle cx="730" cy="460" r="3.5"/>
+  </g>
+
+  <!-- ===================== BOARD CENTRAL ===================== -->
+  <g filter="url(#boardShadow)">
+    <rect x="450" y="290" width="300" height="270" rx="22" fill="url(#board)" stroke="#2a5578" stroke-width="1.5"/>
+  </g>
+  <!-- pinos decorativos nas bordas do board -->
+  <g fill="#3a6b8f">
+    <g id="pinrow">
+      <rect x="458" y="296" width="10" height="3" rx="1"/>
+    </g>
+  </g>
+  <text x="600" y="345" text-anchor="middle" font-size="20" font-weight="700" fill="#eaf6ff">Heltec V3</text>
+  <text x="600" y="366" text-anchor="middle" font-size="12.5" fill="#7fa6c9" letter-spacing="0.5">ESP32-S3 · FreeRTOS</text>
+
+  <line x1="478" y1="382" x2="722" y2="382" stroke="#25405a" stroke-width="1"/>
+
+  <text x="600" y="406" text-anchor="middle" font-size="12" fill="#9fd8cc" font-weight="600">I2C — GPIO 6 · 7</text>
+  <text x="600" y="422" text-anchor="middle" font-size="10.5" fill="#6f8aa0">BNO085 0x4A + DS3231 0x68</text>
+
+  <line x1="478" y1="436" x2="722" y2="436" stroke="#25405a" stroke-width="1"/>
+
+  <text x="600" y="458" text-anchor="middle" font-size="12" fill="#cdb6ff" font-weight="600">SPI — GPIO 33·34·47·48</text>
+  <text x="600" y="474" text-anchor="middle" font-size="10.5" fill="#6f8aa0">SCK · MOSI · MISO · CS</text>
+
+  <line x1="478" y1="488" x2="722" y2="488" stroke="#25405a" stroke-width="1"/>
+
+  <text x="600" y="510" text-anchor="middle" font-size="12" fill="#ffb0b0" font-weight="600">GPIO — 39·40·41·42·0</text>
+  <text x="600" y="526" text-anchor="middle" font-size="10.5" fill="#6f8aa0">LED R·G·B · buzzer · botão</text>
+
+  <rect x="470" y="536" width="260" height="1" fill="none"/>
+  <text x="600" y="550" text-anchor="middle" font-size="10" fill="#4f6a80" font-style="italic">task storage · watchdog I2C · MQTT</text>
+
+  <!-- notch de USB no board -->
+  <rect x="585" y="286" width="30" height="10" rx="3" fill="#0a1120" stroke="#2a5578"/>
+
+  <!-- ===================== CARDS ===================== -->
+  <!-- helper: cada card = rect + ícone + título + linhas de pino -->
+
+  <!-- GY-BNO085 (topo-esquerda) -->
+  <g filter="url(#softShadow)">
+    <rect x="40" y="110" width="260" height="120" rx="16" fill="url(#cardI2C)" stroke="#2fae95" stroke-width="1.3"/>
+  </g>
+  <circle cx="70" cy="140" r="14" fill="none" stroke="#3ee8c8" stroke-width="2"/>
+  <rect x="63" y="133" width="14" height="14" rx="2" fill="#3ee8c8"/>
+  <line x1="70" y1="122" x2="70" y2="126" stroke="#3ee8c8" stroke-width="2"/>
+  <line x1="70" y1="154" x2="70" y2="158" stroke="#3ee8c8" stroke-width="2"/>
+  <line x1="82" y1="140" x2="86" y2="140" stroke="#3ee8c8" stroke-width="2"/>
+  <line x1="54" y1="140" x2="58" y2="140" stroke="#3ee8c8" stroke-width="2"/>
+  <text x="96" y="145" font-size="16.5" font-weight="700" fill="#eaf6ff">GY-BNO085</text>
+  <text x="60" y="172" font-size="11.5" fill="#a8c9be">VCC → 3V3 · GND → GND</text>
+  <text x="60" y="190" font-size="11.5" fill="#a8c9be">SDA → GPIO 6 · SCL → GPIO 7</text>
+  <text x="60" y="208" font-size="11.5" fill="#a8c9be">INT → GPIO 5 · RST → GPIO 4</text>
+  <text x="60" y="224" font-size="11" fill="#3ee8c8" font-weight="600">endereço 0x4A</text>
+
+  <!-- RTC DS3231 (meio-esquerda) -->
+  <g filter="url(#softShadow)">
+    <rect x="40" y="330" width="260" height="100" rx="16" fill="url(#cardI2C)" stroke="#2fae95" stroke-width="1.3"/>
+  </g>
+  <circle cx="70" cy="358" r="14" fill="none" stroke="#3ee8c8" stroke-width="2"/>
+  <line x1="70" y1="358" x2="70" y2="349" stroke="#3ee8c8" stroke-width="2" stroke-linecap="round"/>
+  <line x1="70" y1="358" x2="77" y2="358" stroke="#3ee8c8" stroke-width="2" stroke-linecap="round"/>
+  <text x="96" y="363" font-size="16.5" font-weight="700" fill="#eaf6ff">RTC DS3231</text>
+  <text x="60" y="388" font-size="11.5" fill="#a8c9be">VCC → 3V3 · GND → GND</text>
+  <text x="60" y="406" font-size="11.5" fill="#a8c9be">SDA/SCL → mesmo barramento do BNO085</text>
+  <text x="60" y="422" font-size="11" fill="#3ee8c8" font-weight="600">endereço 0x68</text>
+
+  <!-- Botão calibração (baixo-esquerda) -->
+  <g filter="url(#softShadow)">
+    <rect x="40" y="550" width="260" height="100" rx="16" fill="url(#cardIN)" stroke="#e0983f" stroke-width="1.3"/>
+  </g>
+  <circle cx="70" cy="580" r="14" fill="none" stroke="#ffb84d" stroke-width="2"/>
+  <circle cx="70" cy="580" r="5" fill="#ffb84d"/>
+  <text x="96" y="586" font-size="16.5" font-weight="700" fill="#eaf6ff">Botão calibração</text>
+  <text x="60" y="608" font-size="11.5" fill="#c9b39a">GPIO 0 (BOOT onboard)</text>
+  <text x="60" y="626" font-size="11.5" fill="#c9b39a">Ativo baixo · pull-up interno</text>
+
+  <!-- microSD (topo-direita) -->
+  <g filter="url(#softShadow)">
+    <rect x="900" y="110" width="260" height="130" rx="16" fill="url(#cardSPI)" stroke="#8a5fe0" stroke-width="1.3"/>
+  </g>
+  <path d="M 918,126 h18 l6,6 v18 h-24 z" fill="none" stroke="#b58cff" stroke-width="2" stroke-linejoin="round"/>
+  <line x1="924" y1="133" x2="924" y2="144" stroke="#b58cff" stroke-width="1.6"/>
+  <line x1="930" y1="133" x2="930" y2="144" stroke="#b58cff" stroke-width="1.6"/>
+  <text x="956" y="145" font-size="16.5" font-weight="700" fill="#eaf6ff">Módulo microSD</text>
+  <text x="918" y="172" font-size="11.5" fill="#c9bce6">VCC → 3V3 (módulo bare — nunca 5V)</text>
+  <text x="918" y="190" font-size="11.5" fill="#c9bce6">SCK 33 · MOSI 34 · MISO 47 · CS 48</text>
+  <text x="918" y="208" font-size="11" fill="#b58cff" font-weight="600">MISO costuma vir serigrafado "MOSO"</text>
+  <text x="918" y="226" font-size="11" fill="#8f9db3">rotação 15min · poda por espaço livre</text>
+
+  <!-- LED RGB (meio-direita) -->
+  <g filter="url(#softShadow)">
+    <rect x="900" y="330" width="260" height="100" rx="16" fill="url(#cardOUT)" stroke="#e05f5f" stroke-width="1.3"/>
+  </g>
+  <circle cx="922" cy="358" r="8" fill="#ff5c5c"/>
+  <circle cx="940" cy="358" r="8" fill="#3ee88a"/>
+  <circle cx="958" cy="358" r="8" fill="#5c9cff"/>
+  <text x="978" y="363" font-size="16.5" font-weight="700" fill="#eaf6ff">LED RGB</text>
+  <text x="918" y="388" font-size="11.5" fill="#e0c2c2">R 39 · G 40 · B 41 (catodo comum)</text>
+  <text x="918" y="406" font-size="11.5" fill="#e0c2c2">verde=normal · amarelo=atenção</text>
+  <text x="918" y="422" font-size="11" fill="#ff8f8f" font-weight="600">vermelho=crítico · azul=calibrando</text>
+
+  <!-- Buzzer (baixo-direita) -->
+  <g filter="url(#softShadow)">
+    <rect x="900" y="550" width="260" height="100" rx="16" fill="url(#cardOUT)" stroke="#e0983f" stroke-width="1.3"/>
+  </g>
+  <path d="M 916,580 h10 l10,-8 v16 l-10,-8 z" fill="#ffb84d"/>
+  <path d="M 940,572 a 12 12 0 0 1 0 16" fill="none" stroke="#ffb84d" stroke-width="2" stroke-linecap="round"/>
+  <text x="962" y="586" font-size="16.5" font-weight="700" fill="#eaf6ff">Buzzer ativo</text>
+  <text x="918" y="608" font-size="11.5" fill="#e0d0b3">+ → GPIO 42 · − → GND</text>
+  <text x="918" y="626" font-size="11.5" fill="#e0d0b3">Soa só em estado crítico</text>
+
+  <!-- ===================== LEGENDA ===================== -->
+  <g transform="translate(300,700)">
+    <circle cx="0" cy="0" r="6" fill="#3ee8c8"/>
+    <text x="16" y="4" font-size="12.5" fill="#c7d8e6">I2C (dados)</text>
+
+    <circle cx="150" cy="0" r="6" fill="#b58cff"/>
+    <text x="166" y="4" font-size="12.5" fill="#c7d8e6">SPI (armazenamento)</text>
+
+    <circle cx="340" cy="0" r="6" fill="#ff6b6b"/>
+    <text x="356" y="4" font-size="12.5" fill="#c7d8e6">GPIO saída</text>
+
+    <circle cx="480" cy="0" r="6" fill="#ffb84d"/>
+    <text x="496" y="4" font-size="12.5" fill="#c7d8e6">GPIO entrada / atuador</text>
+  </g>
+
+  <!-- ===================== RESUMO DE GPIOs ===================== -->
+  <g transform="translate(150,760)" font-size="11.5" fill="#5f7891">
+    <text x="0" y="0">GPIO 4·5 RST/INT BNO085</text>
+    <text x="220" y="0">GPIO 6·7 I2C SDA/SCL</text>
+    <text x="420" y="0">GPIO 0 botão</text>
+    <text x="560" y="0">GPIO 33·34·47·48 SPI SD</text>
+    <text x="800" y="0">GPIO 39·40·41·42 LED/buzzer</text>
+  </g>
+
+  <!-- ===================== RODAPÉ ===================== -->
+  <text x="600" y="850" text-anchor="middle" font-size="11.5" fill="#4a6178" letter-spacing="0.5">
+    PulsoPNAAT — Sistema Embarcado de Manutenção Preditiva por Análise de Vibração
+  </text>
+  <text x="600" y="870" text-anchor="middle" font-size="10.5" fill="#37485a">
+    Jetro K. · Jhonatan G. · José Adiel C. · Lucas V. — FIT · MCTI Futuro · Softex
+  </text>
+</svg>
