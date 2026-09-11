@@ -4,6 +4,7 @@
 #include "storage.h"
 #include "rtc_ds3231.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
@@ -138,6 +139,86 @@ static esp_err_t montar_sd(void)
 
 /* ----------------------- rotação por tempo (RF12 + Grafana) -------------- */
 
+/*
+ * Poda de capacidade (rede de segurança, NÃO política de retenção padrão):
+ * RF12 pede acúmulo persistente — isso continua sendo o padrão. Mas um
+ * cartão real tem fim, e um SD cheio travaria toda escrita futura (RNF09).
+ * Só entra em ação quando o espaço livre cai abaixo de
+ * CONFIG_PULSOPNAAT_LOG_ESPACO_MINIMO_KB — nesse caso apaga o(s) log(s)
+ * mais antigo(s) (nomes com timestamp do RTC ordenam cronologicamente por
+ * string, "log_20260911_..." < "log_20260911_...") até voltar a ter folga.
+ */
+static void podar_logs_antigos_se_necessario(void)
+{
+    uint64_t total_bytes = 0, livre_bytes = 0;
+    if (esp_vfs_fat_info(CONFIG_PULSOPNAAT_SD_MOUNT_POINT, &total_bytes, &livre_bytes) !=
+        ESP_OK) {
+        return; /* não deu pra consultar — não arrisca apagar às cegas */
+    }
+
+    const uint64_t limite_bytes = (uint64_t)CONFIG_PULSOPNAAT_LOG_ESPACO_MINIMO_KB * 1024ULL;
+    if (livre_bytes >= limite_bytes) {
+        return;
+    }
+
+    char dir[160];
+    snprintf(dir, sizeof(dir), "%s/%s", CONFIG_PULSOPNAAT_SD_MOUNT_POINT,
+             CONFIG_PULSOPNAAT_LOG_DIR);
+
+    for (int tentativas = 0; tentativas < CONFIG_PULSOPNAAT_LOG_PODA_MAX_ARQUIVOS;
+        ++tentativas) {
+        DIR *d = opendir(dir);
+        if (d == NULL) {
+            ESP_LOGW(TAG, "poda: não foi possível abrir %s (%s)", dir, strerror(errno));
+            return;
+        }
+
+        char mais_antigo[192] = {0};
+        struct dirent *ent;
+        while ((ent = readdir(d)) != NULL) {
+            const size_t len = strlen(ent->d_name);
+            /* Só considera os próprios arquivos de log ("log_*.csv") —
+             * nunca mexe em nada que o usuário tenha posto no cartão. */
+            if (strncmp(ent->d_name, "log_", 4) != 0 || len < 5 ||
+                strcmp(ent->d_name + len - 4, ".csv") != 0) {
+                continue;
+            }
+            if (mais_antigo[0] == '\0' || strcmp(ent->d_name, mais_antigo) < 0) {
+                strncpy(mais_antigo, ent->d_name, sizeof(mais_antigo) - 1);
+            }
+        }
+        closedir(d);
+
+        if (mais_antigo[0] == '\0') {
+            ESP_LOGW(TAG, "poda: espaço livre baixo mas não sobrou log antigo pra apagar");
+            return;
+        }
+
+        char caminho[224];
+        snprintf(caminho, sizeof(caminho), "%s/%s", dir, mais_antigo);
+        if (remove(caminho) != 0) {
+            ESP_LOGW(TAG, "poda: falha ao apagar %s (%s)", caminho, strerror(errno));
+            return;
+        }
+        ESP_LOGW(TAG, "poda: espaço livre baixo (%llu KB < %d KB) — apagado log mais "
+                      "antigo: %s",
+                 (unsigned long long)(livre_bytes / 1024),
+                 CONFIG_PULSOPNAAT_LOG_ESPACO_MINIMO_KB, mais_antigo);
+
+        if (esp_vfs_fat_info(CONFIG_PULSOPNAAT_SD_MOUNT_POINT, &total_bytes, &livre_bytes) !=
+            ESP_OK) {
+            return;
+        }
+        if (livre_bytes >= limite_bytes) {
+            return; /* já tem espaço de novo */
+        }
+    }
+
+    ESP_LOGE(TAG, "poda: apagou %d arquivos numa única rotação e AINDA está com pouco "
+                  "espaço — cartão perto do fim ou %d KB de limite alto demais pra ele",
+             CONFIG_PULSOPNAAT_LOG_PODA_MAX_ARQUIVOS, CONFIG_PULSOPNAAT_LOG_ESPACO_MINIMO_KB);
+}
+
 static esp_err_t abrir_novo_arquivo(const struct tm *hora_opt)
 {
     char caminho[192];
@@ -185,6 +266,7 @@ static void rotacionar_se_necessario(const struct tm *hora_opt)
         fclose(s_arquivo);
         s_arquivo = NULL;
     }
+    podar_logs_antigos_se_necessario();
     (void)abrir_novo_arquivo(hora_opt); /* falha aqui → s_arquivo fica NULL,
                                           * write() abaixo descarta e conta */
 }

@@ -16,6 +16,11 @@
  * (datasource CSV/Infinity) prática — sem reprocessar o cartão inteiro a
  * cada consulta.
  *
+ * Poda por capacidade (CONFIG_PULSOPNAAT_LOG_ESPACO_MINIMO_KB): rede de
+ * segurança, não é retenção por padrão. Só apaga os logs mais antigos se o
+ * espaço livre do cartão cair abaixo do limite configurado — sem isso, um
+ * cartão real eventualmente enche e trava toda escrita futura (RNF09).
+ *
  * Degradação (RF12/RNF09): falha de montagem do cartão OU ausência do RTC
  * NÃO é erro fatal. storage_init() sempre retorna ESP_OK se a task/fila
  * foram criadas — mesmo sem cartão, mesmo sem RTC (nesse caso o timestamp

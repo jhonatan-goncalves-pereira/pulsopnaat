@@ -66,6 +66,30 @@ menu "PulsoPNAAT: Armazenamento (microSD + RTC DS3231)"
             wear-leveling do cartão) → registro mais novo é descartado,
             contabilizado em log agregado (não por item).
 
+    config PULSOPNAAT_LOG_ESPACO_MINIMO_KB
+        int "Espaço livre mínimo no cartão antes de podar logs antigos (KB)"
+        default 10240
+        range 512 1048576
+        help
+            Rede de segurança de CAPACIDADE — não é a política de retenção
+            padrão (RF12 pede acúmulo persistente; a poda só age quando o
+            espaço realmente aperta). A cada rotação, se o espaço livre
+            cair abaixo disso, os arquivos "log_*.csv" mais antigos em
+            <mount>/<log_dir>/ são apagados (do mais antigo pro mais novo)
+            até voltar acima do limite. Sem isso, um cartão cheio travaria
+            a escrita indefinidamente numa operação de longo prazo.
+            Default 10240 (10 MB) dá folga para várias horas de log antes
+            de precisar podar, mesmo em cartões pequenos.
+
+    config PULSOPNAAT_LOG_PODA_MAX_ARQUIVOS
+        int "Máximo de arquivos apagados por verificação de rotação"
+        default 20
+        range 1 200
+        help
+            Limite de segurança por ciclo — evita apagar o diretório
+            inteiro de uma vez se o cartão estiver quase cheio ou o limite
+            de espaço configurado for alto demais para o cartão em uso.
+
     config PULSOPNAAT_RTC_I2C_ADDR
         hex "Endereço I2C do RTC DS3231"
         default 0x68
