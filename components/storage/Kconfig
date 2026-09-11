@@ -27,6 +27,20 @@ menu "PulsoPNAAT: Armazenamento (microSD + RTC DS3231)"
         int "microSD SPI CS GPIO"
         default 48
 
+    config PULSOPNAAT_SD_SPI_MAX_FREQ_KHZ
+        int "Frequência máxima do SPI do microSD (kHz)"
+        default 4000
+        range 400 20000
+        help
+            Teto de clock pós-negociação. Default ESP-IDF é 20000 (20 MHz) —
+            em fiação de protoboard com jumpers longos isso costuma causar
+            timeout logo na negociação inicial (erro 0x107,
+            sdmmc_init_spi_crc). 4000 (4 MHz) é bem mais tolerante a sinal
+            ruim; throughput não é problema aqui (1 registro CSV por
+            segundo). Se MESMO ASSIM continuar falhando, o problema não é
+            velocidade — é fiação (MISO×MOSO trocado) ou tensão (módulo
+            precisando de 5V em vez de 3V3).
+
     config PULSOPNAAT_SD_MOUNT_POINT
         string "Ponto de montagem FATFS"
         default "/sdcard"

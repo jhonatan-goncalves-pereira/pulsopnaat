@@ -90,6 +90,12 @@ static esp_err_t montar_sd(void)
     };
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    /* Default do SDSPI tenta subir a até 20 MHz depois da negociação
+     * inicial — jumpers longos/soltos em protoboard costumam não aguentar
+     * isso, dando exatamente timeout no meio da negociação (0x107, visto em
+     * campo nesta bancada). Teto mais conservador troca throughput (que não
+     * importa pra 1 registro CSV por segundo) por robustez de sinal. */
+    host.max_freq_khz = CONFIG_PULSOPNAAT_SD_SPI_MAX_FREQ_KHZ;
 
     const spi_bus_config_t bus_cfg = {
         .mosi_io_num = CONFIG_PULSOPNAAT_SD_SPI_MOSI_GPIO,
