@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="docs/img/fit_logo.png" alt="FIT — Fundação de apoio à tecnologia" width="140">
+  <img src="docs/img/fit_logo.png" alt="FIT — Fundação de apoio à tecnologia" width="auto">
 
 </p>
 
@@ -21,7 +21,7 @@ José Adiel Calixto Serafim · Lucas Vinicius Santos Leonel
  
 1. [Por que este projeto existe](#1-por-que-este-projeto-existe) - dor, resultado, limites
 2. [Arquitetura](#2-arquitetura) - diagrama de blocos, fluxo de dados, tasks, estados
-3. [Hardware e montagem](#3-hardware-e-montagem) - peças, pinagem I2C, LED/buzzer, fixação
+3. [Hardware e montagem](#3-hardware-e-montagem) - peças, pinagem I2C, LED/buzzer, RTC, microSD, fixação
 4. [Software e estrutura do repositório](#4-software-e-estrutura-do-repositório) - pastas e arquivos
 5. [Dependências](#5-dependências) - bibliotecas, plataformas, ferramentas
 6. [Pré-requisitos](#6-pré-requisitos) - o que instalar antes de começar
@@ -30,6 +30,8 @@ José Adiel Calixto Serafim · Lucas Vinicius Santos Leonel
 8. [Como compilar, gravar e monitorar](#8-como-compilar-gravar-e-monitorar) - passo a passo reprodutível
    - 8.1 [Partição "factory" pequena demais](#81-partição-factory-pequena-demais-app-partition-is-too-small)
 9. [Como operar](#9-como-operar) - calibrar, classificar, LED/buzzer, MQTT, demo
+   - 9.5 [Data logging (microSD + RTC)](#95-data-logging-microsd--rtc--para-que-serve)
+   - 9.6 [Observabilidade: MQTT → Grafana](#96-observabilidade-mqtt--grafana)
 10. [Como testar](#10-como-testar) - suíte Unity on-target
 11. [Critérios de sucesso (KPIs)](#11-critérios-de-sucesso-kpis)
 12. [Solução de problemas](#12-solução-de-problemas)
@@ -143,6 +145,8 @@ BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA
 |---|---|---|
 | Placa de processamento | Heltec WiFi LoRa 32 V3 (ESP32-S3) | Placa padrão do kit PNAAT; rádio LoRa presente mas não usado pelo firmware |
 | Sensor | Módulo GY-BNO085 (acelerômetro triaxial) | Único dispositivo com acelerometria do kit; lido em modo I2C |
+| Relógio de tempo real | RTC DS3231 | Timestamp absoluto para o datalog; mesmo barramento I2C do BNO085 (ver §3.5) |
+| Armazenamento | Módulo microSD (leitor SPI) | Datalog em CSV com rotação por tempo (ver §3.5 e §9.5) |
 | Sinalização | LED RGB externo (3 canais discretos) + resistores ~220-330 Ω por canal | A Heltec V3 não tem LED RGB endereçável utilizável, usar LED externo |
 | Alerta sonoro | Buzzer ativo (liga/desliga por nível digital, sem PWM) | Soa apenas em estado crítico |
 | Fixação | Suporte/cola rígida + parafusos | Acoplamento rígido à carcaça é pré-condição de leitura confiável |
@@ -187,6 +191,30 @@ Polaridade (catodo comum = nível alto acende, default; anodo comum = desmarcar
 e GPIOs, tudo em `idf.py menuconfig` → componente `alert_manager`. Na Heltec V3 evite
 GPIOs 8-14 (rádio LoRa) e 17/18/21 (OLED).
  
+### 3.5 RTC DS3231 e módulo microSD (armazenamento local)
+
+**RTC DS3231 — mesmo barramento I2C do BNO085:**
+
+| DS3231 | ESP32-S3 | Sinal / nota |
+|---|---|---|
+| VCC | 3V3 | Alimentação 3,3 V |
+| GND | GND | Referência comum |
+| SDA | GPIO 6 | Mesmo pino/barramento do BNO085 |
+| SCL | GPIO 7 | Mesmo pino/barramento do BNO085 |
+| Endereço I2C | — | `0x68` (fixo de fábrica) |
+
+**Módulo microSD — SPI dedicado:**
+
+| microSD | ESP32-S3 | Sinal / nota |
+|---|---|---|
+| VCC | 3V3 | Módulo bare — nunca ligar em 5V |
+| GND | GND | Referência comum |
+| SCK | GPIO 33 | |
+| MOSI | GPIO 34 | |
+| MISO | GPIO 47 | Costuma vir serigrafado "MOSO" no módulo |
+| CS | GPIO 48 | |
+
+Cartão precisa estar formatado em FAT32 (não exFAT).
 
  ## Resumo Visual pinout
 
@@ -247,12 +275,6 @@ hardware (I2C, Wi-Fi/MQTT, GPIO, SD/RTC) vive nas bordas (`i2c_config`,
 `vibration_sensor`, `wifi_config`, `pnaat_mqtt_client`, `alerta_servico`, `storage`,
 `app_main`) e é validada on-device.
  
-> **Nota:** `storage` (microSD + RTC, RF12/RNF09) foi integrado depois desta versão do
-> README — a tabela de configuração (§7) e a seção de operação (§9) ainda não cobrem
-> os detalhes desse componente (rotação de CSV, poda por espaço, watchdog do I2C).
-> Fica como próximo passo de consolidação; não incluí aqui pra não misturar com o que
-> você pediu agora.
- 
 ---
  
 ## 5. Dependências
@@ -309,6 +331,11 @@ idf.py menuconfig
 | `WiFi Configuration` | SSID / Password / retries | "" / "" / 5 | Credenciais da rede; ficam só na configuração local; **rede precisa ser 2,4 GHz** (ver §6) |
 | `MQTT Client` | Broker URI | `mqtt://localhost:1883` | Apontar para o broker da bancada (padrão de testes em §7.1) |
 | `alert_manager` | LED R/G/B, buzzer, botão, k confirmação | 39/40/41, 42, 0, 3 | Ver §3.4; k = janelas consecutivas para confirmar mudança de estado |
+| `PulsoPNAAT → Armazenamento` | SD SCK/MOSI/MISO/CS | 33/34/47/48 | Ver §3.5 |
+| `PulsoPNAAT → Armazenamento` | SD clock máximo | 4000 kHz | Mais tolerante a fiação de protoboard |
+| `PulsoPNAAT → Armazenamento` | Rotação/espaço mínimo | 15 min / 10 MB | Ver §9.5 |
+| `PulsoPNAAT → Armazenamento` | Endereço I2C do RTC | 0x68 | Mesmo barramento do BNO085 |
+| `PulsoPNAAT → Amostragem` | Watchdog timeout/backoff | 3000/2000 ms | Ver §12.1 |
  
 Notas:
  
@@ -468,8 +495,69 @@ node, ts_us, estado + RMS por eixo (~150 B, folga no buffer de 192 B em `main/ma
 2. Induza vibração (toque/estímulo na carcaça).
 3. LED amarelo → vermelho + buzzer em ~3 s; alerta em `pulsopnaat/alert`.
 4. Remova o estímulo → após 3 janelas limpas, volta a verde.
----
- 
+
+### 9.5 Data logging (microSD + RTC) — para que serve
+
+RF12/RNF09. Cada janela processada (fora do estado `BOOT`) é enfileirada para uma task
+**dedicada de baixa prioridade** que grava um CSV no cartão — a amostragem e o DSP
+**nunca** esperam por I/O de SD (RNF09). Timestamp vem do RTC DS3231 (§3.5), no mesmo
+barramento I2C do BNO085; sem RTC, cai para `boot+<segundos>`.
+
+**Por que isso importa além de "ter um log":**
+
+- **Constrói o dataset rotulado** necessário antes de sequer cogitar o detector de
+  anomalia offline (Mahalanobis/K-means) mencionado em §1 — não dá pra treinar nada
+  sem operação saudável real registrada.
+- **Evidência auditável** por trás de cada alerta — RF05 já manda o payload MQTT com
+  o valor de cada métrica, mas o CSV é o que sustenta uma investigação posterior.
+
+**Onde/como:**
+
+- `/sdcard/pulso/log_<timestamp ou boot_ms>.csv`, append, sobrevive a reboot.
+- Rotação por tempo (`CONFIG_PULSOPNAAT_LOG_ROTACAO_MIN`, default 15 min): cada
+  arquivo cobre uma janela fixa — o histórico completo é a sequência de arquivos,
+  não um único CSV gigante.
+- Poda por capacidade (`CONFIG_PULSOPNAAT_LOG_ESPACO_MINIMO_KB`, default 10 MB
+  livres): rede de segurança, **não** é retenção por padrão — o padrão é acúmulo
+  persistente. Só apaga os `.csv` mais antigos se o espaço livre cair abaixo do
+  limite, pra um cartão cheio nunca travar a escrita (RNF09).
+- Falha de SD ou RTC **degrada, não trava**: monitoramento, LED/buzzer e MQTT
+  seguem normalmente; só o log fica ausente (contabilizado em log agregado, não
+  por linha, pra não floodar o console).
+
+**Formato do CSV:**
+´´´
+timestamp,node_id,estado_maquina,estado_equipamento,rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,...,thd_z
+2026-09-10T18:22:41Z,pulsopnaat-01,MONITORANDO,VERDE,0.0198,0.0018,...
+´´´
+
+### 9.6 Observabilidade: MQTT → Grafana
+
+![Componentes → MQTT → Grafana](docs/img/pulsopnaat_horizontal_mqtt_grafana.gif)
+
+O nó tem **dois caminhos de observabilidade** independentes, cada um servindo um
+propósito diferente:
+
+- **Tempo real (MQTT):** alertas e status chegam imediatamente em `pulsopnaat/alert` e
+  `pulsopnaat/status` (§9.3) — bom para notificação acionável da equipe de manutenção,
+  visualizável no MQTT Explorer ou no dashboard HiveMQ (§7.1).
+- **Histórico (Grafana):** o CSV gravado no cartão SD (§9.5) é retirado do cartão e
+  importado no Grafana via plugin CSV/Infinity — bom para análise de tendência ao
+  longo do tempo, com série temporal de `rms_x/y/z` colorida por `estado_equipamento`.
+
+**Esse segundo caminho é offline/pós-coleta**, não uma integração ao vivo entre MQTT e
+Grafana — o Grafana não está plugado no broker MQTT neste projeto, ele lê o arquivo CSV
+já exportado. Isso é intencional: a rotação por tempo (§9.5) mantém cada CSV pequeno o
+bastante pra importar sem reprocessar o cartão inteiro a cada consulta.
+
+Passo a passo pra reproduzir a visualização:
+
+1. Deixe o nó rodando até fechar pelo menos um arquivo completo de log (§9.5).
+2. Retire o cartão, leia num adaptador USB no PC.
+3. Grafana → plugin **Infinity** (ou datasource CSV nativo) → aponta pro `.csv`.
+4. Série temporal com `timestamp` no eixo X e `rms_x`/`rms_y`/`rms_z` como séries;
+   colorir por `estado_equipamento` pra visualizar a transição verde→vermelho.
+ ---
 ## 10. Como testar
  
 Corpus Unity (v2.6.0, componente `unity` do ESP-IDF) em `components/*/test/`,
@@ -523,7 +611,23 @@ estabilidade 2 h) é validada on-device por observação direta (serial, CSV, cr
 | `app partition is too small` no build | Binário cresceu além de 1 MB (ex.: componente `storage`) | Trocar pra "Single factory app (large)" — passo a passo em §8.1 |
 | Build ok, flash falha | Cabo só-carga, porta ocupada pelo monitor, driver USB | Trocar cabo, fechar monitor, reinstalar driver, `idf.py -p /dev/ttyUSB0 flash` |
 | `idf.py` não encontrado | Ambiente do ESP-IDF não exportado nesta shell | `. $IDF_PATH/export.sh` e repetir |
+| microSD não monta (0x107/ESP_ERR_TIMEOUT) | MISO×MOSO trocado, cartão não FAT32, ou sem 3V3 estável | Reencaixar/testar outro cartão; conferir §3.5 |
+| LED trava numa cor após "I2C hardware timeout detected" | Barramento I2C engasgou | Mitigado: watchdog reinicializa o BNO085 sozinho — ver §12.1 |
  
+ ### 12.1 Problemas conhecidos
+
+- **Travamento do I2C (BNO085) — mitigado, não eliminado.** Em campo, observado
+  `E (...) i2c.master: I2C hardware timeout detected` seguido de parada total das
+  janelas — sem reboot, então o watchdog do sistema não pegava. **Correção aplicada:**
+  `vibration_sensor` monitora o tempo desde a última janela concluída; se passar o
+  timeout configurado sem nenhuma, reinicializa o BNO085 (RST físico + novo handshake
+  SH-2) a partir da própria task de amostragem, com backoff entre tentativas. Causa
+  raiz ainda não isolada — o watchdog trata o sintoma. Risco conhecido e não validado
+  em operação longa: `bno085_init()` é de um componente gerenciado
+  (`rinku404/bno085`) cujo código não foi auditado — reinicializações repetidas podem,
+  em tese, vazar heap aos poucos; validar com `esp_get_free_heap_size()` antes de
+  confiar numa operação de produção longa.
+
 ---
  
 ## 13. Convenções de contribuição
