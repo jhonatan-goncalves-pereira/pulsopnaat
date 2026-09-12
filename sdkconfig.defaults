@@ -1,0 +1,27 @@
+@"
+# ==========================================
+# Configurações Padrão do Projeto PulsoPNAAT
+# (Arquivo seguro para versionamento no Git)
+# ==========================================
+
+# 1. Target do Chip (Garante que todos usem ESP32-S3)
+CONFIG_IDF_TARGET="esp32s3"
+
+# 2. Hardware e Pinagem (Pode ser compartilhado, não é senha)
+CONFIG_PULSOPNAAT_RPM_NOMINAL=1500
+CONFIG_PULSOPNAAT_LED_R_GPIO=39
+CONFIG_PULSOPNAAT_LED_G_GPIO=40
+CONFIG_PULSOPNAAT_LED_B_GPIO=41
+CONFIG_PULSOPNAAT_BUZZER_GPIO=42
+CONFIG_PULSOPNAAT_BOTAO_CALIBRACAO_GPIO=0
+
+# 3. Configurações de Build e Partição
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# 4. Configurações de Rede (Deixadas em BRANCO por segurança)
+# Cada desenvolvedor preencherá isso localmente no menuconfig
+CONFIG_WIFI_SSID=""
+CONFIG_WIFI_PASSWORD=""
+CONFIG_MQTT_BROKER_URI="mqtt://localhost:1883"
+"@ | Out-File -FilePath sdkconfig.defaults -Encoding utf8

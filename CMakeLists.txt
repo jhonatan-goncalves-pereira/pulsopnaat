@@ -1,13 +1,6 @@
-<<<<<<< HEAD
-# The following five lines of boilerplate have to be in your project's
+# The following lines of boilerplate have to be in your project's
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(pulsopnaat)
-=======
-cmake_minimum_required(VERSION 3.16)
-
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(bno085_example_basic_read)
->>>>>>> origin/develop

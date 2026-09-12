@@ -1,249 +1,453 @@
-# PulsoPNAAT — Sistema Embarcado de Manutenção Preditiva por Análise de Vibração
+# PulsoPNAAT: Manutenção Preditiva por Análise de Vibração
 
-**TCC — Trabalho de Conclusão da Capacitação PNAAT 2026** (FIT - Instituto de Tecnologia | MCTI Futuro | Softex)
+TCC: Trabalho de Conclusão da Capacitação PNAAT 2026 (FIT · MCTI Futuro · Softex)
 
-**Equipe:**
-- Jetro Kepler Gomes Alencar Gonzaga Viana
-- Jhonatan Gonçalves Pereira
-- José Adiel Calixto Serafim
-- Lucas Vinicius Santos Leonel
+Um nó de borda (ESP32-S3 + BNO085) fixado à carcaça de um equipamento rotativo monitora
+a vibração triaxial em tempo real, calcula métricas de severidade na borda (Edge AI) e
+emite alertas antes da falha, via MQTT e sinalização local (LED + buzzer).
+
+Equipe: Jetro Kepler Gomes Alencar Gonzaga Viana · Jhonatan Gonçalves Pereira ·
+José Adiel Calixto Serafim · Lucas Vinicius Santos Leonel
 
 ---
 
-## 1. O que é este projeto?
+## Sumário
 
-Sistema embarcado de manutenção preditiva por análise de vibração (ESP32-S3 + BNO085) — TCC PNAAT 2026, cenário 8: falha de maquinário rotativo em manufatura pesada.
+1. [Por que este projeto existe](#1-por-que-este-projeto-existe) - dor, resultado, limites
+2. [Arquitetura](#2-arquitetura) - diagrama de blocos, fluxo de dados, tasks, estados
+3. [Hardware e montagem](#3-hardware-e-montagem) - peças, pinagem I2C, LED/buzzer, fixação
+4. [Software e estrutura do repositório](#4-software-e-estrutura-do-repositório) - pastas e arquivos
+5. [Dependências](#5-dependências) - bibliotecas, plataformas, ferramentas
+6. [Pré-requisitos](#6-pré-requisitos) - o que instalar antes de começar
+7. [Configuração](#7-configuração) - Wi-Fi, MQTT, equipamento, pinos (`menuconfig`)
+8. [Como compilar, gravar e monitorar](#8-como-compilar-gravar-e-monitorar) - passo a passo reprodutível
+9. [Como operar](#9-como-operar) - calibrar, classificar, LED/buzzer, MQTT, demo
+10. [Como testar](#10-como-testar) - suíte Unity on-target
+11. [Critérios de sucesso (KPIs)](#11-critérios-de-sucesso-kpis)
+12. [Solução de problemas](#12-solução-de-problemas)
+13. [Convenções de contribuição](#13-convenções-de-contribuição)
 
-Cenário 8 do PNAAT 2026: falha repentina de maquinário rotativo (motores elétricos e rolamentos) por ausência de acompanhamento preditivo, em ambiente de manufatura pesada.
+---
 
-## 2. O que compõe a solução?
+## 1. Por que este projeto existe
 
-**Hardware:**
-- Placa de processamento: ESP32-S3 (Heltec WiFi LoRa 32 V3)
-- Sensor: acelerômetro triaxial BNO085 (módulo GY-BNO085), conectado via SPI
-- Sinalização local: LED e buzzer *(a partir da entrega 04 — atualizar conforme progresso)*
+A dor (Cenário 8, manufatura pesada): motores elétricos e rolamentos sofrem desgaste
+progressivo que altera o padrão de vibração *semanas antes* da falha catastrófica, um
+sinal imperceptível à supervisão humana. Sem acompanhamento preditivo, a manutenção opera
+no modo reativo: a primeira indicação do problema é a própria parada não programada
+(custo emergencial + perda de produção).
 
-**Software:**
-- Firmware em C++ sobre Arduino Framework (FreeRTOS)
-- Bibliotecas: `Adafruit BNO08x`, `Adafruit BusIO`, `arduinoFFT`
-- Métricas calculadas por janela: RMS, FFT (1x/2x/3x-5x), Kurtosis, THD
-- Conectividade: MQTT sobre Wi-Fi *(a partir da entrega 04/05 — atualizar conforme progresso)*
+O que o sistema faz: cada janela de 1 s de vibração vira 6 métricas por eixo
+(RMS, 1x, 2x, banda 3x-5x, kurtosis, THD), comparadas a um baseline calibrado do próprio
+equipamento. O estado (normal / atenção / crítico) sai por votação entre métricas, com o
+pior eixo dando o estado do equipamento. Saída puramente informativa: o nó observa
+e informa, nunca atua sobre o motor.
 
-## 3. Pré-requisitos
+O que o sistema explicitamente NÃO faz (limites declarados do projeto):
 
-- [PlatformIO](https://platformio.org/) (extensão VS Code ou CLI)
-- [Driver USB-Serial CP210x](https://www.silabs.com/software-and-tools/usb-to-uart-bridge-vcp-drivers?tab=downloads) (para reconhecer a placa Heltec via USB)
-- Git
+- Não interrompe o motor nem aciona atuadores (exigiria contatores, isolamento galvânico,
+  segurança industrial, fora do escopo).
+- Não diagnostica causa raiz com precisão plena (indica *tendências*: pico em 1x sugere
+  desbalanceamento, 2x desalinhamento etc., não substitui laudo técnico).
+- Não detecta falhas de rolamento em alta frequência (BPFO/BPFI, 1-10 kHz): a 400 Hz de
+  amostragem, o Nyquist de 200 Hz não alcança essa faixa.
+- Não arquiva em nuvem nem faz análise histórica avançada.
+- Não usa o rádio LoRa da placa; a rede é Wi-Fi + MQTT, com modo de contingência local
+  quando o Wi-Fi cai.
 
-## 4. Dependências e instalação
+---
 
-As dependências de biblioteca já estão declaradas no `platformio.ini` e são baixadas automaticamente pelo PlatformIO no primeiro build — não é necessário instalar nada manualmente além do PlatformIO em si.
+## 2. Arquitetura
+
+### 2.1 Diagrama de blocos (fluxo de dados)
+
+```mermaid
+flowchart LR
+    subgraph SENSOREAMENTO
+        M[motor / equipamento<br/>fonte de vibração]
+        S[BNO085<br/>aceleração linear 3 eixos<br/>400 Hz, sem gravidade]
+        M -->|vibração mecânica<br/>fixação rígida| S
+    end
+    subgraph PROCESSAMENTO_BORDA[ESP32-S3 — processamento na borda]
+        AQ[aquisição + janelamento<br/>1 s = 400 amostras/eixo<br/>core 0, prio alta]
+        DSP[cálculo por janela e por eixo<br/>RMS + FFT/Hann-512 + kurtosis + THD<br/>core 1, ~11 ms]
+        BL[baseline calibrado<br/>30 janelas, Welford<br/>NVS — média+σ por métrica/eixo]
+        CL[classificação 3σ/6σ<br/>votação + pior eixo<br/>confirmação k=3 janelas]
+        SM[máquina de estados<br/>BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA]
+        S -->|I2C 400 kHz| AQ -->|fila janela| DSP
+        DSP --> BL
+        BL --> CL --> SM
+    end
+    subgraph SAIDAS[Saídas informativas]
+        LED[LED RGB externo<br/>verde/amarelo/vermelho<br/>azul calibrando, branco sem rede]
+        BZ[buzzer<br/>só em crítico]
+        MQ{MQTT / Wi-Fi<br/>broker Mosquitto local}
+        SM --> LED
+        SM --> BZ
+        SM -->|fila alertas<br/>task separada, sem bloquear amostragem| MQ
+    end
+```
+
+Leitura do fluxo: vibração → BNO085 (I2C) → amostragem (core 0) → fila →
+processamento (core 1) → comparação com baseline → classificação → dois destinos
+independentes: sinalização local imediata (LED/buzzer) e publicação remota (MQTT).
+Queda de Wi-Fi não trava a amostragem: o nó entra em `CONTINGÊNCIA`, sinaliza "sem
+conectividade" e tenta reconectar sozinho.
+
+### 2.2 Elementos e relações
+
+| Bloco | Elemento | Papel | Relação / fluxo |
+|---|---|---|---|
+| Sensoriamento | BNO085 (módulo GY-BNO085 do kit) | Aceleração linear triaxial (X, Y, Z) em m/s², já sem gravidade (fusão no sensor) | I2C 400 kHz → ESP32-S3; fixado rigidamente à carcaça |
+| Processamento | ESP32-S3 (Heltec WiFi LoRa 32 V3), FreeRTOS | Amostragem (core 0) + cálculo + classificação (core 1) | Janelas via Queue; alertas via Queue dedicada |
+| Baseline | 30 janelas saudáveis, Welford, NVS | "Assinatura saudável" por métrica e eixo | Calibração comandada (botão/serial/MQTT); sem baseline não há classificação |
+| Decisão | Limiares mean+3σ / mean+6σ, votação, pior eixo, confirmação k=3 | Estado normal/atenção/crítico | Blips de 1 janela não viram alarme; falha real persiste e confirma |
+| Conectividade | Wi-Fi + MQTT (broker Mosquitto local) | Alerta remoto acionável | Task de baixa prioridade; nunca bloqueia a amostragem |
+| Sinalização | LED RGB externo + buzzer ativo | Estado visível/audível no chão de fábrica | Buzzer só em crítico; falha de LED/buzzer não derruba o monitoramento |
+| Robustez | Watchdog, filtro Hampel + rejeição de spikes | Operação contínua | Spikes fisicamente impossíveis são descartados antes da estatística |
+
+> No código, a conectividade está desdobrada em dois componentes:
+> `components/wifi_config/` (station + retries até `WIFI_MAX_RETRY`, default 5) e
+> `components/mqtt_client/` (transporte + `mqtt_payloads.c` puro).
+
+### 2.3 Máquina de estados
+
+```
+BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA
+```
+
+- BOOT: inicializa hardware; sem baseline válido, descarta janelas (LED apagado).
+  Reboot com baseline salvo em NVS entra direto em `MONITORANDO`.
+- CALIBRANDO: 30 janelas (~30 s) com o equipamento em regime saudável; LED azul
+  piscando ("não perturbe o equipamento"). Não classifica.
+- MONITORANDO: classifica cada janela, atualiza LED/buzzer, publica alertas.
+- CONTINGÊNCIA: Wi-Fi indisponível; LED branco piscando; reconexão automática;
+  buzzer continua reservado ao estado crítico.
+
+---
+
+## 3. Hardware e montagem
+
+### 3.1 Peças
+
+| Item | Modelo | Observação |
+|---|---|---|
+| Placa de processamento | Heltec WiFi LoRa 32 V3 (ESP32-S3) | Placa padrão do kit PNAAT; rádio LoRa presente mas não usado pelo firmware |
+| Sensor | Módulo GY-BNO085 (acelerômetro triaxial) | Único dispositivo com acelerometria do kit; lido em modo I2C |
+| Sinalização | LED RGB externo (3 canais discretos) + resistores ~220-330 Ω por canal | A Heltec V3 não tem LED RGB endereçável utilizável, usar LED externo |
+| Alerta sonoro | Buzzer ativo (liga/desliga por nível digital, sem PWM) | Soa apenas em estado crítico |
+| Fixação | Suporte/cola rígida + parafusos | Acoplamento rígido à carcaça é pré-condição de leitura confiável |
+
+### 3.2 Ligação I2C: ESP32-S3 (Heltec V3) × GY-BNO085
+
+| BNO085 | ESP32-S3 | Sinal / nota |
+|---|---|---|
+| VCC | 3V3 | Alimentação 3,3 V |
+| GND | GND | Referência comum |
+| SDA | GPIO 6 | I2C data (`APP_BNO085_I2C_SDA_GPIO`, default 6) |
+| SCL | GPIO 7 | I2C clock (`APP_BNO085_I2C_SCL_GPIO`, default 7) |
+| INT (H_INTN) | GPIO 5 | Data-ready, ativo baixo |
+| RST (NRST) | GPIO 4 | Reset, ativo baixo |
+| AD0/SA0 | GND | Seleciona o endereço 0x4A (ver §3.3) |
+| PS0 + PS1 | GND | Obrigatório: modo I2C; flutuando o sensor não responde |
+| VCC do AD0/PSx | - | Não ligar em VCC salvo para mudar o endereço (ver abaixo) |
+
+Frequência do barramento: 400 kHz (`APP_BNO085_I2C_FREQ_HZ`). Mantenha os fios I2C
+curtos e afastados dos cabos do motor (ruído eletromagnético próximo ao motor).
+
+### 3.3 Endereço I2C: use 0x4A (0x28 NÃO funciona neste setup)
+
+- Default do firmware: `0x4A` (`APP_BNO085_I2C_ADDR` em `main/Kconfig.projbuild`).
+- 0x28/0x29 são endereços do BNO055, não do BNO085. Com o módulo GY-BNO085 do kit
+  ligado à Heltec LoRa V3, `0x28` recebe NACK (o sensor não responde).
+- Regra do BNO085 (datasheet): SA0/AD0 em GND → 0x4A; em VCC → 0x4B.
+- Se o scanner I2C não achar nada em 0x4A: confira PS0/PS1 em GND, alimentação 3V3 e
+  SDA/SCL (6/7) antes de suspeitar de defeito.
+
+### 3.4 Sinalização local e botão
+
+| Função | GPIO (default) | Nota |
+|---|---|---|
+| LED canal R | GPIO 39 | Vermelho = crítico; R+G = amarelo; R+G+B = branco (sem rede) |
+| LED canal G | GPIO 40 | Verde fixo = normal |
+| LED canal B | GPIO 41 | Azul piscando = calibrando |
+| Buzzer ativo | GPIO 42 | Nível liga/desliga; polaridade em `menuconfig` |
+| Botão calibração | GPIO 0 | Botão BOOT onboard, ativo baixo, pull-up interno |
+
+Polaridade (catodo comum = nível alto acende, default; anodo comum = desmarcar
+`PULSOPNAAT_LED_ATIVO_ALTO`), canais desativáveis com GPIO negativo (LED de cor única)
+e GPIOs, tudo em `idf.py menuconfig` → componente `alert_manager`. Na Heltec V3 evite
+GPIOs 8-14 (rádio LoRa) e 17/18/21 (OLED).
+
+---
+
+## 4. Software e estrutura do repositório
+
+Cada linha abaixo corresponde a um caminho real neste repositório (critério de
+rastreabilidade da banca: o que o README cita, o explorador de arquivos encontra).
+
+```
+.
+├── main/                          firmware: wiring do sistema
+│   ├── main.c                     app_main — filas, tasks com pinning, pipeline completo
+│   ├── Kconfig.projbuild          menu "PulsoPNAAT": I2C/GPIO, aquisição, RPM, node ID
+│   ├── idf_component.yml          dependência rinku404/bno085 v1.2.0
+│   └── CMakeLists.txt             liga main aos 7 componentes
+├── components/
+│   ├── i2c_config/                barramento I2C master + dispositivo BNO085
+│   │   ├── i2c_config.c  include/i2c_config.h  CMakeLists.txt
+│   ├── vibration_sensor/          aquisição LINEAR_ACCELERATION (0x04) @400 Hz, janelas 1 s
+│   │   ├── vibration_sensor.c  include/vibration_sensor.h  CMakeLists.txt
+│   ├── signal_processing/         matemática pura: RMS, Hann, FFT-512 (esp-dsp), kurtosis, THD
+│   │   ├── signal_processing.c  include/signal_processing.h
+│   │   ├── idf_component.yml      espressif/esp-dsp ^1.6.0 (consumidor direto da FFT)
+│   │   └── test/test_signal_processing.c
+│   ├── baseline/                  calibração comandada (30 janelas, Welford) + NVS
+│   │   ├── baseline.c  baseline_nvs.c  include/baseline.h  include/baseline_nvs.h
+│   │   └── test/test_baseline.c
+│   ├── alert_manager/             classificação 3σ/6σ, votação/pior eixo, máquina de estados, LED/buzzer
+│   │   ├── alert_manager.c (núcleo puro)  alerta_servico.c (face on-device)
+│   │   ├── include/alert_manager.h  include/alerta_servico.h  Kconfig  CMakeLists.txt
+│   │   └── test/test_alert_manager.c
+│   ├── wifi_config/               Wi-Fi station + reconexão (Kconfig: SSID/senha)
+│   │   ├── wifi_config.c  include/wifi_config.h  Kconfig  CMakeLists.txt
+│   └── mqtt_client/               cliente MQTT + formatação de payloads (núcleo puro)
+│       ├── pnaat_mqtt_client.c  mqtt_payloads.c
+│       ├── include/pnaat_mqtt_client.h  include/mqtt_payloads.h
+│       ├── Kconfig (broker URI)  CMakeLists.txt
+│       └── test/test_mqtt_client.c
+├── test_app/                      app de teste on-target (Unity no ESP32-S3)
+│   ├── main/test_app_main.c       runner: registra rodar_testes_<comp>() de cada suíte
+│   ├── CMakeLists.txt             inclui só os componentes com corpus de teste
+│   └── sdkconfig.defaults
+├── dependencies.lock              versões resolvidas (esp-dsp 1.8.2, bno085 1.2.0, IDF 5.5.5)
+└── README.md                      este manual (você está aqui)
+```
+
+Lógica de organização: matemática/estado (`signal_processing`, `baseline`,
+`alert_manager`, `mqtt_payloads`) é pura (sem ESP-IDF, sem I/O, sem estado global)
+para ser testável isolada do hardware. Integração de
+hardware (I2C, Wi-Fi/MQTT, GPIO) vive nas bordas (`i2c_config`, `vibration_sensor`,
+`wifi_config`, `pnaat_mqtt_client`, `alerta_servico`, `app_main`) e é validada on-device.
+
+---
+
+## 5. Dependências
+
+| Categoria | Dependência | Versão | Origem / registro | Para quê |
+|---|---|---|---|---|
+| Plataforma | ESP-IDF | ≥ 5.5 (resolvido: 5.5.5) | instalador Espressif; `dependencies.lock` | Toolchain, FreeRTOS, Wi-Fi/MQTT, NVS, Unity |
+| Alvo | ESP32-S3 | - | `idf.py set-target esp32s3` | MCU da Heltec V3 |
+| Driver sensor | `rinku404/bno085` | 1.2.0 | `main/idf_component.yml` (registry Espressif) | HAL SH-2 I2C do BNO085 |
+| DSP | `espressif/esp-dsp` | ^1.6.0 (resolvido: 1.8.2) | `components/signal_processing/idf_component.yml` | FFT (`dsps_fft`), janela Hann, cálculo da janela com folga (~11 ms/janela) |
+| Teste | `unity` (componente ESP-IDF) | 2.6.0 | provido pelo ESP-IDF | Corpus em `components/*/test/`, executado on-target |
+| Firmware | - | C/C++ sobre FreeRTOS | `main/main.c`, `components/*` | Aquisição, DSP, classificação, conectividade |
+| Broker MQTT | Mosquitto (local, laptop/RPi na mesma Wi-Fi) | qualquer recente | externo ao repo | Recebe `pulsopnaat/#` (tópicos em §9.3) |
+| Ferramentas host | git, Python 3 (via ESP-IDF), driver USB-serial da Heltec | - | SO do desenvolvedor | Clone, build/flash/monitor, console serial |
+
+> Nada além do ESP-IDF precisa ser instalado manualmente para as bibliotecas: `idf.py
+> build` resolve `bno085` e `esp-dsp` pelo registry e trava as versões em
+> `dependencies.lock`.
+
+---
+
+## 6. Pré-requisitos
+
+1. ESP-IDF ≥ 5.5 instalado (com o ambiente exportado a cada sessão, ver §8).
+2. Placa Heltec WiFi LoRa 32 V3 + módulo GY-BNO085 ligados conforme §3.2
+   (atenção ao endereço 0x4A e a PS0/PS1 em GND).
+3. Cabo USB de dados (não só de carga) + driver USB-serial reconhecendo a placa.
+4. Rede Wi-Fi 2,4 GHz acessível + broker Mosquitto rodando nela (para a fase com
+   conectividade; aquisição/classificação/sinalização funcionam sem rede).
+5. Git.
+
+---
+
+## 7. Configuração
+
+Toda configuração é via `menuconfig`. Os símbolos ficam em `main/Kconfig.projbuild` (I2C/aquisição/RPM/node),
+`components/alert_manager/Kconfig` (LED/buzzer/botão/k), `components/wifi_config/Kconfig` (SSID/senha/retries)
+e `components/mqtt_client/Kconfig` (broker URI). Nenhuma credencial vai no código-fonte:
 
 ```bash
-git clone https://github.com/jhonatan-goncalves-pereira/pulsopnaat.git
+idf.py menuconfig
+```
+
+| Onde | Parâmetro | Default | O que significa |
+|---|---|---|---|
+| `PulsoPNAAT → I2C & GPIO` | SDA / SCL / INT / RST | 6 / 7 / 5 / 4 | Pinagem da §3.2 |
+| `PulsoPNAAT → I2C & GPIO` | I2C Address | 0x4A | SA0=GND; 0x4B se SA0=VCC; 0x28 não responde |
+| `PulsoPNAAT → I2C & GPIO` | I2C Clock | 400 kHz | Barramento do sensor |
+| `PulsoPNAAT → Aquisição` | Reporte LINEAR_ACCELERATION | 2500 µs | Pede 400 Hz; o sensor limita ao máximo do reporte → fs = 400 Hz, N = 400, Nyquist 200 Hz |
+| `PulsoPNAAT → Aquisição` | Fila de janelas | 2 | Janelas de ~4,8 KB; cheia → descarta a mais antiga (amostragem nunca bloqueia) |
+| `PulsoPNAAT → Equipamento` | RPM nominal | 1500 | Define f0 = RPM/60 (25 Hz); harmônicos 1x/2x/banda 3x-5x; por equipamento, sem autodetecção |
+| `PulsoPNAAT → Conectividade` | Node ID | `pulsopnaat-01` | Campo `node` do JSON |
+| `WiFi Configuration` | SSID / Password / retries | "" / "" / 5 | Credenciais da rede; ficam só na configuração local |
+| `MQTT Client` | Broker URI | `mqtt://localhost:1883` | Apontar para o Mosquitto da bancada |
+| `alert_manager` | LED R/G/B, buzzer, botão, k confirmação | 39/40/41, 42, 0, 3 | Ver §3.4; k = janelas consecutivas para confirmar mudança de estado |
+
+Notas:
+
+- O serial imprime no boot a configuração efetiva (f0, taxa) e, por janela, a taxa
+  efetiva medida pelos timestamps SH-2, a fs efetiva é a que vale no mapeamento de
+  bins (fallback: nominal 400 Hz).
+- Baseline persiste em NVS (namespace `pnaat`, chave `baseline`, 156 B com mágica+CRC).
+  Registro corrompido é descartado com log, nunca interpretado.
+
+---
+
+## 8. Como compilar, gravar e monitorar
+
+Do zero, em ambiente limpo (reprodutível):
+
+```bash
+# 0. Clonar
+git clone git@github.com:jhonatan-goncalves-pereira/pulsopnaat.git
 cd pulsopnaat
-pio run
+
+# 1. Ativar o ESP-IDF (toda sessão/shell nova. caminho pode variar dependendo do setup)
+source ~/.espressif/tools/activate_idf_v5.5.5.sh
+
+# 2. Selecionar o alvo (uma vez por clone)
+idf.py set-target esp32s3
+
+# 3. (Opcional) ajustar Wi-Fi/MQTT/RPM/pinos
+idf.py menuconfig
+
+# 3b. (Para a fase com conectividade) subir o Mosquitto na mesma Wi-Fi 2,4 GHz
+# e apontar `MQTT Client → Broker URI` para o IP dele (ex.: mqtt://192.168.1.10:1883).
+# O default `mqtt://localhost:1883` só vale com broker no próprio host.
+# Sem rede, aquisição/classificação/sinalização seguem normais (CONTINGÊNCIA).
+
+# 4. Compilar
+idf.py build
+
+# 5. Gravar e abrir o monitor serial
+idf.py flash monitor
+# sair do monitor: Ctrl+]
 ```
 
-Se o comando `pio run` compilar sem erros, as dependências foram resolvidas corretamente.
+Se `idf.py build` termina sem erro, toolchain + `bno085` + `esp-dsp` estão resolvidos.
+O serial mostra CSV de 18 valores/janela (6 métricas × 3 eixos) mais logs de estado:
 
-## 5. Configuração
-
-*(preencher conforme a entrega evoluir — por enquanto a PoC não depende de credenciais)*
-
-Quando a camada Wi-Fi/MQTT for integrada, as credenciais **não** serão gravadas no código-fonte. Um arquivo `.env.example` indicará quais variáveis configurar, e o `.env` real (com os dados reais) não será versionado — ver `.gitignore`.
-
-## 6. Instruções de montagem (conexões elétricas)
-
-Ligação SPI entre o ESP32-S3 (Heltec WiFi LoRa 32 V3) e o módulo GY-BNO085:
-
-| BNO085 | ESP32-S3 (Heltec V3) |
-|---|---|
-| VIN | 3V3 |
-| GND | GND |
-| SCL/SCK | GPIO 4 |
-| SDA/MOSI | GPIO 5 |
-| DI (MISO) | GPIO 3 |
-| CS | GPIO 2 |
-| INT | GPIO 6 |
-| RST | GPIO 7 |
-
-O sensor deve ser fixado **rigidamente** à carcaça do equipamento monitorado (acoplamento rígido é pré-condição para leitura de vibração confiável — ver RNF03 do Documento de Requisitos).
-
-📎 Esquemático elétrico completo: [`docs/diagrama-pinagem.png`](docs/diagrama-pinagem.png)
-📎 Diagrama de arquitetura (fluxo de dados): [`docs/diagrama-blocos.png`](docs/diagrama-blocos.png)
-
-## 7. Como executar
-
-```bash
-pio run -t upload        # grava o firmware na placa
-pio device monitor -b 115200   # abre o monitor serial
+```
+# rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,...,thd_z   (m/s²; kurt/THD adimensionais)
 ```
 
-## 8. Resultado esperado (confirmação de execução)
-
-Ao abrir o monitor serial, você deve ver:
-
-1. A mensagem `BNO085 conectado via SPI!`
-2. Durante os primeiros ~30s, o log `Calibrando (N/40)...` (calibração automática do baseline)
-3. Após a calibração, uma linha por janela processada no formato:
-```
-   Proc: 1840 us | RMS:120.4 FFT1x:88.2 Kurt:0.15 THD:0.22 -> VERDE
-```
-4. Ao induzir desbalanceamento no motor de teste (peso fixado em uma pá), o estado deve migrar para `AMARELO` ou `VERMELHO` em poucos segundos.
-
-Se esses 4 pontos ocorrerem, a execução foi bem-sucedida.
-
-## Estado atual do projeto
-
-| Entrega | Status | Tag |
-|---|---|---|
-| Entrega 1 — Documento de Requisitos | ✅ Concluída | `entrega-01` |
-| Entrega 2 — PoC (lógica de detecção) | 🚧 Em andamento | `entrega-02` |
-| Entrega 3 — Estruturação de repositório | ⏳ Pendente | — |
-| Entrega 4 — Integração final | ⏳ Pendente | — |
-
-**Escopo atual (PoC):** valida exclusivamente se a lógica RMS+FFT+Kurtosis+THD roda dentro da janela de amostragem sem travar o processador e diferencia sinal saudável de sinal com desbalanceamento induzido, usando dados reais de motor/cooler de teste. Wi-Fi, MQTT, LED/buzzer e dashboard estão **fora do escopo** desta fase (ver seção 2.3 — Limitations and Exclusions do Documento de Requisitos).
-
-Resultados da validação: [`data/coleta-poc-entrega02.csv`](data/coleta-poc-entrega02.csv)
-
-## Próxima etapa
-
-Integração das camadas de conectividade (Wi-Fi/MQTT) e sinalização local (LED/buzzer), seguindo estratégia de Integração Bottom-Up, sem alterar a lógica de detecção já validada nesta PoC.
+> Apagou algo da NVS ou trocou de bancada? `idf.py erase-flash` limpa o baseline salvo
+> (o nó volta a pedir calibração, comportamento esperado, não defeito).
 
 ---
 
-## Padrão de commits
+## 9. Como operar
 
-Adotamos uma convenção simplificada inspirada em [Conventional Commits](https://www.conventionalcommits.org/), com um conjunto reduzido de tipos suficiente para o escopo deste projeto:
+### 9.1 Calibrar (obrigatório antes de classificar)
 
-| Tipo | Emoji | Quando usar |
+Sem baseline válido o nó fica em `BOOT` descartando janelas. Não há classificação
+sem baseline (decisão travada). Com o equipamento em regime saudável estável
+(passada a partida/aquecimento):
+
+- Botão: pressione o BOOT (GPIO 0), ou
+- Serial: digite `calibrar` (insensível a maiúsculas), ou
+- MQTT: publique `calibrar` em `pulsopnaat/command`.
+
+LED azul piscando por 30 janelas (~30 s) → baseline (média/σ por métrica e eixo)
+salvo em NVS → `MONITORANDO`. Reboot carrega da NVS e volta direto a monitorar.
+Diagnóstico a qualquer momento: comando `status` (serial ou MQTT), estado da máquina,
+estado do equipamento, baseline presente/ausente, uptime e RMS médio±σ.
+
+### 9.2 Classificação (o que cada cor significa)
+
+| Estado | Condição (por janela, após confirmação k=3) | LED | Buzzer |
+|---|---|---|---|
+| Verde (normal) | nenhuma métrica além de mean+3σ | verde fixo | off |
+| Amarelo (atenção) | 1-2 métricas além de mean+3σ | amarelo (R+G) piscando | off |
+| Vermelho (crítico) | 1 métrica além de mean+6σ ou 3 em atenção | vermelho fixo | on |
+| Sem conectividade | Wi-Fi fora (máquina em CONTINGÊNCIA) | branco (R+G+B) piscando | só se equipamento crítico |
+
+Estado do equipamento = pior eixo (falha uniaxial não é diluída). A mudança só se
+efetiva após 3 janelas consecutivas do mesmo candidato (histerese simétrica, inclusive
+na volta ao verde). Blips de 1 janela (ex.: picos de kurtosis sobre ruído de
+quantização em repouso) não flipam o alarme; falha real persiste e confirma em ~3 s.
+
+### 9.3 MQTT (alerta remoto)
+
+| Tópico | Direção | Conteúdo |
 |---|---|---|
-| `feat` | ✨ | Nova funcionalidade (ex: cálculo de FFT, publicação MQTT) |
-| `fix` | 🐛 | Correção de bug ou comportamento incorreto |
-| `docs` | 📚 | Mudança apenas em documentação (README, diagramas, comentários) |
-| `test` | 🧪 | Criação ou ajuste de testes/coleta de dados de validação |
-| `refactor` | ♻️ | Reorganização de código sem mudar comportamento |
-| `perf` | ⚡ | Melhoria de desempenho (latência, uso de memória) |
-| `chore` | 🔧 | Configuração de build, dependências, `.gitignore` etc. |
+| `pulsopnaat/alert` | nó → broker | `{"node":"...","ts_us":…,"estado":"...","rms_x":…,"rms_y":…,"rms_z":…}` ao confirmar atenção/crítico |
+| `pulsopnaat/status` | nó → broker | `{"node":"...","maquina":"...","equipamento":"...","baseline":true,"uptime_s":…}` ao conectar e sob comando |
+| `pulsopnaat/command` | broker → nó | `calibrar` ou `status` (comparação exata, `calibrar\n` não dispara) |
 
-**Formato:** `<emoji> <tipo>: <descrição curta no imperativo>`
+Publicação em task separada de baixa prioridade: rede nunca bloqueia amostragem.
+Formato (`mqtt_formatar_alerta` em `components/mqtt_client/mqtt_payloads.c`):
+node, ts_us, estado + RMS por eixo (~150 B, folga no buffer de 192 B em `main/main.c:74`).
 
-Exemplos:
-```bash
-git commit -m "✨ feat: adiciona cálculo de kurtosis por janela"
-git commit -m "🐛 fix: corrige overflow no buffer de amostragem SPI"
-git commit -m "📚 docs: atualiza README com instruções de montagem"
-git commit -m "🧪 test: registra coleta de dados da PoC (10 janelas saudáveis)"
-```
+### 9.4 Demo de anomalia (roteiro de bancada)
 
-Regra prática: mensagem curta e direta na primeira linha; se precisar explicar o *porquê* da mudança, use o corpo do commit (linha em branco + parágrafo).
+1. Nó em `MONITORANDO` verde, equipamento saudável.
+2. Induza vibração (toque/estímulo na carcaça).
+3. LED amarelo → vermelho + buzzer em ~3 s; alerta em `pulsopnaat/alert`.
+4. Remova o estímulo → após 3 janelas limpas, volta a verde.
 
-## Padrão de branches
+---
 
-| Branch | Uso |
-|---|---|
-| `main` | Sempre estável e executável. Cada entrega recebe uma tag (`entrega-01`, `entrega-02`...) |
-| `feature/<escopo>` | Nova funcionalidade (ex: `feature/fft-metrics`, `feature/mqtt-publish`) |
-| `fix/<escopo>` | Correção de bug (ex: `fix/spi-timeout`) |
-| `poc/<escopo>` | Experimentos que podem não virar código definitivo (ex: `poc/baseline-calibracao`) |
-| `docs/<escopo>` | Alterações apenas de documentação |
+## 10. Como testar
 
-Ninguém commita direto na `main`. Toda mudança nasce em uma branch com o prefixo adequado e é mesclada via merge/PR.# PulsoPNAAT
-
-Sistema embarcado de **manutenção preditiva por análise de vibração**: um nó de
-borda (ESP32-S3 + BNO085) fixado à carcaça de um equipamento rotativo amostra a
-aceleração triaxial a ~400 Hz (sem a gravidade, via aceleração linear), calcula
-métricas por janela de 1 s (RMS hoje;
-FFT, kurtosis e THD nas próximas fases), classifica o estado contra um baseline
-calibrado (normal / atenção / crítico) e emite alertas via MQTT + LED/buzzer.
-
-Documentos normativos: `requisitos.md` (v2.1) e `SPEC.md` (derivação técnica).
-
-## Estrutura
-
-```
-main/                      app_main: fila, tasks com pinning, wiring dos componentes
-components/
-  i2c_config/              barramento I2C do BNO085
-  vibration_sensor/        aquisição LINEAR_ACCELERATION (m/s², sem gravidade) @400 Hz, janelamento
-  signal_processing/       matemática pura do pipeline (RMS, FFT, kurtosis, THD)
-  baseline/                calibração comandada (30 janelas, Welford) + NVS
-  alert_manager/           classificação 3σ/6σ, votação/pior eixo, máquina de
-                           estados, LED/buzzer (núcleo puro + serviço on-device)
-test_app/                  app de teste on-target (Unity no ESP32-S3)
-requisitos.md, SPEC.md     normativos
-```
-
-## Build & Flash
-
-Requer ESP-IDF ≥ 5.5 (`​. $IDF_PATH/export.sh`):
+Corpus Unity (v2.6.0, componente `unity` do ESP-IDF) em `components/*/test/`,
+executado on-target, valida o comportamento float e o esp-dsp no próprio Xtensa:
 
 ```bash
-idf.py set-target esp32s3   # uma vez
-idf.py build
-idf.py flash monitor
-```
-
-Configuração do nó em `idf.py menuconfig` → **PulsoPNAAT** (pinos I2C/GPIO,
-intervalo de reporte do sensor, fila de janelas, LED/buzzer/botão de calibração).
-Saída no serial: CSV de 6 métricas × 3 eixos por janela + logs de estado.
-
-## Operação (calibração, classificação, LED/buzzer)
-
-1. **Monitorar** `idf.py build flash monitor` — sem baseline, o nó aguarda em
-   `BOOT` (janelas descartadas, LED apagado): *não há classificação sem baseline*.
-2. **Calibrar** com o equipamento em regime saudável: digite `calibrar` (serial)
-   ou pressione o botão BOOT. LED **azul piscando**; 30 janelas (~30 s) → baseline
-   (média/σ por métrica e eixo, Welford) salvo em NVS → `MONITORANDO`.
-   Reboot carrega o baseline da NVS e entra direto em `MONITORANDO`.
-3. **Classificar**: cada janela é comparada ao baseline (atenção > média+3σ,
-   crítico > média+6σ, por métrica); votação por eixo e **pior eixo** dão o estado
-   do equipamento. LED: **verde** fixo / **amarelo** piscando / **vermelho** fixo;
-   buzzer soa APENAS em vermelho (crítico). `status` imprime estado, baseline e
-   uptime. `transitar()`/classificação são funções puras (SPEC, seams 1 e 2).
-
-Demo (anomalia): com o nó monitorando, induza vibração (tocar/auxiliar na carcaça,
-peso no cooler) → LED amarelo → vermelho + buzzer; remova o estímulo → volta a verde.
-
-## Testes (Unity on-target)
-
-Os testes vivem em `components/<comp>/test/` e rodam na placa pelo app de teste
-(mesmo componente `unity` do ESP-IDF, versão 2.6.0):
-
-```bash
+idf.py -C test_app set-target esp32s3   # uma vez
 idf.py -C test_app build flash monitor
-# resumo Unity no serial: "N Tests 0 Failures 0 Ignored / OK"
+# resumo no serial: "N Tests 0 Failures 0 Ignored / OK"
 ```
 
-Nova suíte: criar `components/<comp>/test/test_<comp>.c` (API core do Unity:
-`TEST_ASSERT_*`, função `rodar_testes_<comp>()`) e registrá-la no runner
-`test_app/main/test_app_main.c`.
+| Suíte | Arquivo | O que cobre |
+|---|---|---|
+| `signal_processing` | `components/signal_processing/test/test_signal_processing.c` | RMS, cadeia espectral (senoide em f0/2f0/4f0, THD), kurtosis, `metricas_para_vetor` |
+| `baseline` | `components/baseline/test/test_baseline.c` | Welford exato, coleta parcial/excedente, validação, serialização NVS (mágica/versão/CRC) |
+| `alert_manager` | `components/alert_manager/test/test_alert_manager.c` | Limiares 3σ/6σ, votação, pior eixo, máquina de estados, sinalização |
+| `mqtt_client` | `components/mqtt_client/test/test_mqtt_client.c` | Formatação dos payloads de alerta/status |
 
-## Hardware (wiring Heltec LoRa V3)
+Nova suíte: criar `components/<comp>/test/test_<comp>.c` (API `TEST_ASSERT_*`, função
+`rodar_testes_<comp>()`) e registrá-la no runner
+[`test_app/main/test_app_main.c`](test_app/main/test_app_main.c). Integração de hardware
+(I2C a 400 Hz, latência < 1 s, Wi-Fi/MQTT + reconexão, LED/buzzer, watchdog,
+estabilidade 2 h) é validada on-device por observação direta (serial, CSV, cronômetro).
 
-| BNO085 | ESP32-S3 | Sinal |
-|--------|----------|-------|
-| SDA | GPIO 6 | I2C data |
-| SCL | GPIO 7 | I2C clock |
-| INT (H_INTN) | GPIO 5 | data-ready, ativo baixo |
-| RST (NRST) | GPIO 4 | reset, ativo baixo |
-| AD0 | GND | endereço I2C 0x28 (VCC → 0x29) |
-| PS0/PS1 | GND | modo I2C (obrigatório) |
-| VCC/GND | 3V3/GND | alimentação |
+---
 
-| Sinalização | ESP32-S3 | Nota |
-|-------------|----------|------|
-| LED RGB — canal R | GPIO 39 | LED RGB **externo**, resistor série ~220–330 Ω por canal |
-| LED RGB — canal G | GPIO 40 | idem |
-| LED RGB — canal B | GPIO 41 | idem |
-| Buzzer ativo | GPIO 42 | nível liga/desliga; ajuste em menuconfig se o wiring diferir |
-| Botão calibração | GPIO 0 | botão **BOOT** onboard, ativo baixo, pull-up interno |
+## 11. Critérios de sucesso (KPIs)
 
-LED RGB: catodo comum por padrão (canal acende com nível alto — `menuconfig →
-PulsoPNAAT → Sinalização`); para anodo comum, desmarque "Canais do LED ligam em
-nível alto". Um canal com GPIO negativo fica desativado (ex.: LED de cor única).
-No Heltec V3 evite 8–14 (rádio LoRa) e 17/18/21 (OLED).
+| Critério | Meta mensurável | Onde verificar |
+|---|---|---|
+| Acurácia de detecção | ≥ 85% em 20 janelas (10 saudáveis + 10 erro induzido) | Campanha de validação, matriz VP/VN/FP/FN |
+| Falsos positivos | ≤ 2 alertas em 1 h de operação normal | Log serial |
+| Latência de processamento | Cálculo da janela < 1 s | Medido on-device: ~11 ms (folga de ~99%) |
+| Resiliência de rede | Queda de Wi-Fi não trava a amostragem; retry automático até `WIFI_MAX_RETRY` em modo CONTINGÊNCIA | Teste de queda proposital (serial + LED branco) |
+| Estabilidade | ≥ 2 h contínuas sem travar, sem leak, sem intervenção | Monitoramento de turno |
 
-Driver do sensor: `rinku404/esp-idf-bno085` v1.2.0 (I2C apenas, HAL SH-2) —
-dependência registrada em `main/idf_component.yml`.
+---
+
+## 12. Solução de problemas
+
+| Sintoma | Causa provável | Ação |
+|---|---|---|
+| Sensor não responde / NACK em `0x28` | Endereço errado: 0x28 é do BNO055 | Usar 0x4A (SA0=GND) ou 0x4B (SA0=VCC) |
+| Nada em 0x4A no scanner | PS0/PS1 flutuando, VCC/GND ou SDA/SCL trocados | PS0+PS1→GND; conferir §3.2; fios curtos |
+| Nó parado em `BOOT`, "sem baseline" | Comportamento esperado, não defeito | Executar `calibrar` com regime saudável (§9.1) |
+| Estado flipando a cada janela em repouso | Kurtosis sobre ruído de quantização (picos 20-400 de 1 janela) | Esperado e absorvido pela confirmação k=3; não zerar k sem motivo |
+| `status` mostra baseline ausente após reboot | NVS apagada / outro firmware gravado | Recalibrar; `baseline_carregar_nvs` loga o motivo |
+| Wi-Fi conecta mas sem alerta remoto | Broker URI apontando para `localhost` default | Ajustar `MQTT Client → Broker URI` para o Mosquitto da bancada |
+| Build ok, flash falha | Cabo só-carga, porta ocupada pelo monitor, driver USB | Trocar cabo, fechar monitor, reinstalar driver, `idf.py -p /dev/ttyUSB0 flash` |
+| `idf.py` não encontrado | Ambiente do ESP-IDF não exportado nesta shell | `. $IDF_PATH/export.sh` e repetir |
+
+---
+
+## 13. Convenções de contribuição
+
+- Branches: `main` (sempre estável; tags `entrega-01`, `entrega-02`…); `feature/<escopo>`,
+  `fix/<escopo>`, `poc/<escopo>`, `docs/<escopo>`. Nada direto na `main`, via merge/PR.
+- Commits (Conventional Commits simplificado): `<emoji> <tipo>: <descrição no imperativo>`
+  : `feat ✨` · `fix 🐛` · `docs 📚` · `test 🧪` · `refactor ♻️` · `perf ⚡` · `chore 🔧`.
+  Ex.: `git commit -m "✨ feat: adiciona cálculo de kurtosis por janela"`.

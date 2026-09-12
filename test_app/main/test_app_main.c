@@ -13,6 +13,7 @@
 extern void rodar_testes_signal_processing(void);
 extern void rodar_testes_baseline(void);
 extern void rodar_testes_alert_manager(void);
+extern void rodar_testes_mqtt_client(void);
 
 void app_main(void)
 {
@@ -24,6 +25,7 @@ void app_main(void)
     rodar_testes_signal_processing();
     rodar_testes_baseline();
     rodar_testes_alert_manager();
+    rodar_testes_mqtt_client();
     UNITY_END();
     /* Resumo já no serial; sistema permanece vivo em idle para leitura
      * tranquila do monitor. */

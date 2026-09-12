@@ -31,6 +31,6 @@
   "clangd.arguments": [
     "--background-index",
     "--query-driver=**",
-    "--compile-commands-dir=c:\\Users\\jhona\\pulsopnaat\\build"
+    "--compile-commands-dir=c:\\Users\\User\\Desktop\\TCC\\build"
   ]
 }
