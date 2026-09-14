@@ -93,3 +93,12 @@ Desktop.ini
 *.workspace # General workspace files, can be from various tools
 *.suo       # Visual Studio Solution User Options
 *.sln.docstates # Visual Studio
+
+# --- Observabilidade local (stack MQTT/InfluxDB/Grafana) ---
+# Segredos do compose nunca vão para o Git (ver .env.example)
+.env
+# Runtime do Mosquitto: banco de persistência e logs locais
+mosquitto/data/*
+!mosquitto/data/.gitkeep
+mosquitto/log/*
+!mosquitto/log/.gitkeep
