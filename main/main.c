@@ -20,6 +20,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h> /* strcasecmp — comandos serial insensíveis a caixa */
+#include <sys/time.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -29,6 +31,7 @@
 #include "driver/uart.h"
 
 #include "esp_log.h"
+#include "esp_netif_sntp.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
@@ -40,6 +43,7 @@
 #include "i2c_config.h"
 #include "mqtt_payloads.h"
 #include "signal_processing.h"
+#include "storage.h"
 #include "vibration_sensor.h"
 #include "wifi_config.h"
 #include "pnaat_mqtt_client.h"
@@ -229,6 +233,20 @@ static void tarefa_conectividade(void *arg)
     }
 }
 
+static void sntp_sincronizado(struct timeval *tv)
+{
+    struct tm utc;
+    gmtime_r(&tv->tv_sec, &utc);
+    esp_err_t err = storage_ajustar_rtc(&utc);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "RTC ajustado via SNTP: %04d-%02d-%02dT%02d:%02d:%02dZ",
+                 utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+                 utc.tm_hour, utc.tm_min, utc.tm_sec);
+    } else {
+        ESP_LOGW(TAG, "SNTP sincronizou, mas o RTC não foi ajustado (%s)", esp_err_to_name(err));
+    }
+}
+
 static void wifi_state_changed(wifi_state_t state)
 {
     /* Contexto: loop de eventos ESP. Apenas ops não-bloqueantes aqui. */
@@ -369,6 +387,18 @@ static void tarefa_processamento(void *arg)
         const bool entrou_calibrando = (estado == ESTADO_MAQ_CALIBRANDO) && (estado_visto != estado);
         estado_visto = estado;
 
+        /* RF12: registra a janela no cartão (task dedicada, não-bloqueante —
+         * RNF09). BOOT ainda não tem métrica útil (sem baseline, aguardando
+         * calibração) — não gera ruído no log antes disso. */
+        if (estado != ESTADO_MAQ_BOOT) {
+            const storage_registro_t reg_sd = {
+                .estado_maquina = estado,
+                .estado_equipamento = alerta_servico_estado_equipamento(),
+                .metricas = metricas,
+            };
+            storage_log_janela(&reg_sd);
+        }
+
         switch (estado) {
         case ESTADO_MAQ_CALIBRANDO: {
             if (entrou_calibrando) {
@@ -481,6 +511,13 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(wifi_config_start());
 
+    // lwIP repete a tentativa até haver rede e ressincroniza a cada hora (CONFIG_LWIP_SNTP_UPDATE_DELAY)
+    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    sntp_cfg.sync_cb = sntp_sincronizado;
+    if (esp_netif_sntp_init(&sntp_cfg) != ESP_OK) {
+        ESP_LOGW(TAG, "SNTP não iniciou — RTC segue com a hora que tiver");
+    }
+
     ESP_ERROR_CHECK(alerta_servico_iniciar());
 
     err = baseline_carregar_nvs(&s_baseline);
@@ -498,6 +535,13 @@ void app_main(void)
     i2c_master_dev_handle_t bno085_dev = NULL;
     ESP_ERROR_CHECK(i2c_config_init(&bus_handle, &bno085_dev));
     ESP_ERROR_CHECK(vibration_sensor_start(bno085_dev, s_fila_janelas));
+
+    /* RF12/RNF09: cartão + RTC no mesmo barramento I2C do BNO085. Falha de
+     * SD/RTC é degradação (logada dentro de storage_init), não aborta o
+     * boot — só a criação da fila/task de escrita é fatal aqui. */
+    if (storage_init(bus_handle) != ESP_OK) {
+        ESP_LOGE(TAG, "falha ao iniciar storage (fila/task) — log em SD desabilitado");
+    }
 
     if (xTaskCreatePinnedToCore(tarefa_processamento, "processamento", TAREFA_PROCESSAMENTO_STACK, NULL, TAREFA_PROCESSAMENTO_PRIORIDADE, NULL, TAREFA_PROCESSAMENTO_CORE) != pdPASS) {
         ESP_LOGE(TAG, "falha ao criar task de processamento");
