@@ -10,6 +10,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "driver/gpio.h"
 #include "driver/sdspi_host.h"
@@ -264,6 +265,7 @@ static esp_err_t abrir_novo_arquivo(const struct tm *hora_opt)
          * (raro: mesmo segundo de RTC) não duplica cabeçalho. */
         fputs(CSV_CABECALHO, f);
         fflush(f);
+        fsync(fileno(f));
     }
 
     s_arquivo = f;
@@ -357,11 +359,12 @@ static void tarefa_storage(void *arg)
                 m->banda_3x_5x[EIXO_Y], m->kurtosis[EIXO_Y], m->thd[EIXO_Y],
                 m->rms[EIXO_Z], m->harmonica_1x[EIXO_Z], m->harmonica_2x[EIXO_Z],
                 m->banda_3x_5x[EIXO_Z], m->kurtosis[EIXO_Z], m->thd[EIXO_Z]);
-        /* fflush por linha: ~1 escrita/s (janela de 1 s), custo aceitável na
-         * task de baixa prioridade e garante que um reset/queda de energia
-         * perca no máximo a última janela — não o arquivo inteiro (RF12:
-         * "sobreviver a reinicializações"). */
+        /* fflush sozinho não basta no FAT: o tamanho do arquivo na entrada de
+         * diretório só é gravado em f_sync/f_close. Sem fsync, reset ou queda de
+         * energia deixa o CSV com 0 bytes (visto em campo). Com ele, perde-se no
+         * máximo a última janela (RF12: "sobreviver a reinicializações"). */
         fflush(s_arquivo);
+        fsync(fileno(s_arquivo));
     }
 }
 
