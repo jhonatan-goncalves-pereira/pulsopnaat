@@ -72,7 +72,7 @@ static const char *TAG = "app_main";
 /* Conectividade roda em contexto de aplicação (core 1, prioridade baixa). */
 #define TAREFA_CONECTIVIDADE_CORE 1
 #define TAREFA_CONECTIVIDADE_PRIORIDADE 2
-#define TAREFA_CONECTIVIDADE_STACK 4096
+#define TAREFA_CONECTIVIDADE_STACK 6144
 /* Poll da conectividade: drena comandos + alertas e trata o start do MQTT.
  * 100 ms acompanha o tick de LED sem atrasar o anúncio de alertas. */
 #define CONECTIVIDADE_POLL_MS 100
@@ -84,6 +84,21 @@ static const char *TAG = "app_main";
  * ajustá-los por equipamento. */
 #define FILA_ALERTAS_PROFUNDIDADE 4
 #define FILA_COMANDOS_PROFUNDIDADE 4
+
+/* Telemetria por janela (RF09 → Telegraf/Grafana). Fila de 1 posição com
+ * sobrescrita: só a janela mais recente importa, nunca bloqueia o DSP. */
+#define MQTT_TOPIC_TELEMETRIA "pulsopnaat/telemetria"
+#define PAYLOAD_TELEMETRIA_BUF_TAM 640
+
+typedef struct {
+    int64_t ts_us;
+    estado_maquina_t maquina;
+    estado_equipamento_t equipamento;
+    metricas_t metricas;
+    float score;
+    bool anomalia;
+    rotulo_dataset_t rotulo;
+} telemetria_evento_t;
 
 /* Evento de classificação (processamento → conectividade, item 1): o DSP
  * nunca formata nem publica — só classifica e enfileira (non-blocking). */
@@ -107,6 +122,7 @@ typedef struct {
 static QueueHandle_t s_fila_janelas;
 static QueueHandle_t s_fila_alertas;
 static QueueHandle_t s_fila_comandos;
+static QueueHandle_t s_fila_telemetria;
 
 /* Baseline vigente + acumulador da calibração — só a task de processamento
  * toca (single-consumer, como o buffer de janela). */
@@ -234,6 +250,22 @@ static void publicar_alerta(const alerta_evento_t *ev)
     }
 }
 
+static void publicar_telemetria(const telemetria_evento_t *t)
+{
+    if (!mqtt_client_is_connected()) {
+        return;
+    }
+    char buf[PAYLOAD_TELEMETRIA_BUF_TAM];
+    const size_t n = mqtt_formatar_telemetria(buf, sizeof(buf), CONFIG_PULSOPNAAT_NODE_ID, t->ts_us,
+                                              t->maquina, t->equipamento, &t->metricas, t->score,
+                                              t->anomalia, nome_rotulo(t->rotulo));
+    if (n == 0) {
+        ESP_LOGW(TAG, "telemetria não formatada — descartada");
+        return;
+    }
+    (void)mqtt_client_publish(MQTT_TOPIC_TELEMETRIA, buf, 0, 0);
+}
+
 static void tratar_comando_rede(const comando_rede_t *cmd)
 {
     if (cmd->tipo == COMANDO_REDE_CALIBRAR) {
@@ -271,6 +303,10 @@ static void tarefa_conectividade(void *arg)
         while (xQueueReceive(s_fila_alertas, &ev, 0) == pdTRUE) {
             publicar_alerta(&ev);
         }
+        telemetria_evento_t tel;
+        if (xQueueReceive(s_fila_telemetria, &tel, 0) == pdTRUE) {
+            publicar_telemetria(&tel);
+        }
     }
 }
 
@@ -303,7 +339,7 @@ static void wifi_state_changed(wifi_state_t state)
         alerta_servico_publicar_evento(EVENTO_WIFI_CAIR);
     } else if (state == WIFI_STATE_FAILED) {
         s_wifi_tem_ip = false;
-        ESP_LOGE(TAG, "WiFi falhou (MAX_RETRY) — máquina em CONTINGÊNCIA até novo wifi_config_start()");
+        ESP_LOGE(TAG, "WiFi falhou (MAX_RETRY) — máquina em CONTINGÊNCIA; reconexão automática periódica (RNF05)");
         alerta_servico_publicar_evento(EVENTO_WIFI_CAIR);
     }
 }
@@ -447,6 +483,18 @@ static void tarefa_processamento(void *arg)
         const float score = anomalia_score(modelo, &metricas);
         const bool anomalia = anomalia_eh_anomalia(modelo, score);
         s_ultimo_score = score;
+        if (estado != ESTADO_MAQ_BOOT && s_fila_telemetria != NULL) {
+            const telemetria_evento_t tel = {
+                .ts_us = esp_timer_get_time(),
+                .maquina = estado,
+                .equipamento = alerta_servico_estado_equipamento(),
+                .metricas = metricas,
+                .score = score,
+                .anomalia = anomalia,
+                .rotulo = s_rotulo_dataset,
+            };
+            (void)xQueueOverwrite(s_fila_telemetria, &tel);
+        }
         if (anomalia != anomalia_vista && estado != ESTADO_MAQ_BOOT) {
             ESP_LOGI(TAG, "detector (sombra): %s (score=%.2f limiar=%.2f)",
                      anomalia ? "ANOMALIA" : "normal", score, modelo->limiar);
@@ -558,6 +606,11 @@ void app_main(void)
     s_fila_comandos = xQueueCreate(FILA_COMANDOS_PROFUNDIDADE, sizeof(comando_rede_t));
     if (s_fila_comandos == NULL) {
         ESP_LOGE(TAG, "falha ao criar fila de comandos");
+        return;
+    }
+    s_fila_telemetria = xQueueCreate(1, sizeof(telemetria_evento_t));
+    if (s_fila_telemetria == NULL) {
+        ESP_LOGE(TAG, "falha ao criar fila de telemetria");
         return;
     }
 

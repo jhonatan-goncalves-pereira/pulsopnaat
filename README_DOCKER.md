@@ -15,17 +15,40 @@ Sobe:
 
 - Mosquitto em `localhost:1883` (MQTT) e `localhost:9001` (websockets)
 - InfluxDB 2.x em `localhost:8086` (org/bucket/token vêm do `.env`)
-- Telegraf, inscrito em `pulsopnaat/status` e `pulsopnaat/alert`,
-  gravando cada mensagem no InfluxDB
+- Telegraf, inscrito em `pulsopnaat/telemetria`, `pulsopnaat/status` e
+  `pulsopnaat/alert` no broker de `MQTT_BROKER` (padrão: o broker público da bancada,
+  `broker.mqttdashboard.com`, o mesmo do firmware), gravando cada mensagem no InfluxDB
 - Grafana em `localhost:3000` (datasource InfluxDB já provisionado via
   `grafana/provisioning/datasources/influxdb.yml`)
 
+### Windows sem Docker Desktop (Docker Engine no WSL2)
+
+Se o Docker Desktop não instalar (ex.: erro 14098 ao habilitar o Hyper-V), a stack roda
+igual no Docker Engine de uma distro Ubuntu no WSL2, sem Hyper-V. Configuração única:
+
+```powershell
+wsl --install -d Ubuntu --web-download --no-launch
+& "$env:LOCALAPPDATA\Microsoft\WindowsApps\ubuntu.exe" install --root
+wsl -d Ubuntu -u root -- apt-get update
+wsl -d Ubuntu -u root -- apt-get install -y docker.io docker-compose-v2
+```
+
+Depois disso, e a cada reinício do PC, sobe tudo com:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\stack\subir_stack_wsl.ps1
+```
+
+As portas publicadas aparecem no `localhost` do Windows. Se a 3000 já estiver ocupada
+(ex.: outro projeto web), defina `GRAFANA_PORT=3001` no `.env`.
+
 ## Apontar o firmware para cá
 
-No `idf.py menuconfig` → `MQTT Client → Broker URI`, aponte para o IP da
-máquina que roda o compose (ex.: `mqtt://192.168.1.50:1883`). O
-`mqtt://localhost:1883` do `sdkconfig.defaults` só vale quando o broker
-roda na mesma máquina do teste.
+Com o firmware publicando no broker público da bancada, **não precisa mudar nada**:
+o Telegraf lê do mesmo broker (`MQTT_BROKER` no `.env`). Para não depender da internet,
+use o Mosquitto local: no `idf.py menuconfig` → `MQTT Client → Broker URI`, aponte para
+o IP da máquina que roda o compose (ex.: `mqtt://192.168.1.50:1883`) e troque no `.env`
+`MQTT_BROKER=tcp://mosquitto:1883`.
 
 ## Tópicos e payloads reais
 
@@ -37,13 +60,17 @@ pulsopnaat/alert    {"node":"pulsopnaat-01","ts_us":123456789,
                      "rms_x":0.1234,"rms_y":0.2345,"rms_z":0.3456}
 pulsopnaat/status   {"node":"pulsopnaat-01","maquina":"MONITORANDO",
                      "equipamento":"verde (normal)","baseline":true,"uptime_s":3600}
+pulsopnaat/telemetria {"node":"pulsopnaat-01","ts_us":123456789,"maquina":"MONITORANDO",
+                     "equipamento":"verde (normal)","nivel":0,
+                     "rms_x":0.0182,"h1x_x":0.0012, ... ,"thd_z":1.0444,
+                     "score":2.3107,"anomalia":0,"rotulo":"saudavel"}
 ```
 
 Direção inversa (broker → nó): `pulsopnaat/command` com `calibrar` ou
 `status`. O Telegraf consome só `status` e `alert`; `command` não é
 persistido (é ordem, não telemetria).
 
-No InfluxDB isso vira as medições `pulsopnaat_status` e `pulsopnaat_alert`
+No InfluxDB isso vira as medições `pulsopnaat_telemetria`, `pulsopnaat_status` e `pulsopnaat_alert`
 (`name_override` no `telegraf.conf`), com `node` como tag, dá para
 filtrar/agrupar por equipamento no Grafana. Strings (`maquina`,
 `equipamento`, `estado`) são preservadas via `json_string_fields`; sem
@@ -58,9 +85,10 @@ silêncio.
    `pulsopnaat-influxdb`) já vem provisionado, nada a configurar. Se ele
    aparecer sem credenciais, recrie o container (`docker compose up -d`;
    a troca de env recria e re-provisiona sozinha).
-3. O dashboard PNAAT já vem em
-   `grafana/provisioning/dashboards/json/` e aparece na pasta
-   PulsoPNAAT. Para adicionar outro, salve o JSON na mesma pasta e
+3. Os dashboards já vêm em `grafana/provisioning/dashboards/json/` e aparecem na
+   pasta PulsoPNAAT. O principal é **PulsoPNAAT — Monitoramento em tempo real**
+   (estado atual, histórico por estado, métricas por eixo, score do detector e
+   alertas); o PNAAT original segue com os painéis de alertas. Para adicionar outro, salve o JSON na mesma pasta e
    reinicie o container (`docker compose restart grafana`).
 
 ## Teste rápido sem o firmware

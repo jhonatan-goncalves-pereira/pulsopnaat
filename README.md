@@ -482,6 +482,7 @@ quantização em repouso) não flipam o alarme; falha real persiste e confirma e
 |---|---|---|
 | `pulsopnaat/alert` | nó → broker | `{"node":"...","ts_us":…,"estado":"...","rms_x":…,"rms_y":…,"rms_z":…}` ao confirmar atenção/crítico |
 | `pulsopnaat/status` | nó → broker | `{"node":"...","maquina":"...","equipamento":"...","baseline":true,"uptime_s":…}` ao conectar e sob comando |
+| `pulsopnaat/telemetria` | nó → broker | a cada janela (1 Hz): máquina, equipamento, `nivel` (0 verde, 1 amarelo, 2 vermelho), as 18 métricas, `score` (ou `null` sem modelo), `anomalia` e `rotulo` — consumido pelo Telegraf/Grafana (§9.6) |
 | `pulsopnaat/command` | broker → nó | `calibrar`, `status` ou rótulo do dataset `saudavel` / `falha` / `sem_rotulo` (RF15, §9.7) — comparação exata, `calibrar\n` não dispara |
  
 Dados de conexão (host, porta, dashboard, todos os tópicos) em §7.1.
@@ -540,22 +541,20 @@ timestamp,node_id,estado_maquina,estado_equipamento,rms_x,h1x_x,h2x_x,b3x5_x,kur
 
 ![Componentes → MQTT → Grafana](docs/img/pulsopnaat_horizontal_mqtt_grafana.gif)
 
-O nó tem **dois caminhos de observabilidade** independentes, cada um servindo um
-propósito diferente:
+O nó tem **dois caminhos de observabilidade** independentes:
 
-- **Tempo real (MQTT):** alertas e status chegam imediatamente em `pulsopnaat/alert` e
-  `pulsopnaat/status` (§9.3) — bom para notificação acionável da equipe de manutenção,
-  visualizável no MQTT Explorer ou no dashboard HiveMQ (§7.1).
-- **Histórico (Grafana):** o CSV gravado no cartão SD (§9.5) é retirado do cartão e
-  importado no Grafana via plugin CSV/Infinity — bom para análise de tendência ao
-  longo do tempo, com série temporal de `rms_x/y/z` colorida por `estado_equipamento`.
+- **Tempo real (MQTT → Telegraf → InfluxDB → Grafana):** a cada janela o nó publica em
+  `pulsopnaat/telemetria` as 18 métricas, o estado (com `nivel` numérico 0/1/2), o score
+  do detector (§9.7) e o rótulo do dataset; alertas e status seguem em `pulsopnaat/alert`
+  e `pulsopnaat/status` (§9.3). O Telegraf grava tudo no InfluxDB e o dashboard
+  **PulsoPNAAT — Monitoramento em tempo real** mostra estado atual, histórico colorido por
+  estado (RF11), RMS/1x/kurtosis por eixo, score do detector e a tabela de alertas.
+  Como subir a stack: [README_DOCKER.md](README_DOCKER.md).
+- **Histórico longo (CSV do cartão):** o CSV do SD (§9.5) cobre inclusive os períodos sem
+  rede e é a base do treino do detector (§9.7). Dá pra importá-lo no Grafana via plugin
+  CSV/Infinity quando precisar olhar períodos antigos.
 
-**Esse segundo caminho é offline/pós-coleta**, não uma integração ao vivo entre MQTT e
-Grafana — o Grafana não está plugado no broker MQTT neste projeto, ele lê o arquivo CSV
-já exportado. Isso é intencional: a rotação por tempo (§9.5) mantém cada CSV pequeno o
-bastante pra importar sem reprocessar o cartão inteiro a cada consulta.
-
-Passo a passo pra reproduzir a visualização:
+Passo a passo pra olhar o CSV no Grafana:
 
 1. Deixe o nó rodando até fechar pelo menos um arquivo completo de log (§9.5).
 2. Retire o cartão, leia num adaptador USB no PC.

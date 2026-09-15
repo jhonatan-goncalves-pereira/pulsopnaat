@@ -38,6 +38,8 @@ services:
       - INFLUXDB_TOKEN=${INFLUXDB_TOKEN:-my-super-secret-admin-token}
       - INFLUXDB_ORG=${INFLUXDB_ORG:-myorg}
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-mqtt_data}
+      # Onde o nó publica: broker público da bancada por padrão; tcp://mosquitto:1883 para o broker local
+      - MQTT_BROKER=${MQTT_BROKER:-tcp://broker.mqttdashboard.com:1883}
     volumes:
       - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
 
@@ -46,7 +48,7 @@ services:
     container_name: grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${GRAFANA_PORT:-3000}:3000"
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
