@@ -37,6 +37,8 @@ static const char *TAG = "storage";
  * ~1 Hz indefinidamente. */
 #define LOG_DESCARTE_A_CADA 60
 
+#define REMONTAGEM_INTERVALO_US (10LL * 1000000LL)
+
 static const char CSV_CABECALHO[] =
     "timestamp,node_id,estado_maquina,estado_equipamento,"
     "rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,"
@@ -52,6 +54,7 @@ static volatile bool s_rtc_ok;
 static FILE *s_arquivo;
 static int64_t s_arquivo_aberto_us;
 static uint32_t s_descartes_desde_log;
+static int64_t s_ultima_montagem_us;
 
 /* ------------------------------ nomes CSV -------------------------------- *
  * Tokens curtos, sem espaço/parênteses (diferente de mqtt_nome_estado_*):
@@ -112,6 +115,11 @@ static esp_err_t montar_sd(void)
                  esp_err_to_name(err));
         return err;
     }
+
+    // Módulo bare não tem pull-up: sem ele CMD/DAT0/CS flutuam (10 kΩ externo é o ideal)
+    gpio_set_pull_mode((gpio_num_t)CONFIG_PULSOPNAAT_SD_SPI_MOSI_GPIO, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode((gpio_num_t)CONFIG_PULSOPNAAT_SD_SPI_MISO_GPIO, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode((gpio_num_t)CONFIG_PULSOPNAAT_SD_SPI_CS_GPIO, GPIO_PULLUP_ONLY);
 
     sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_cfg.gpio_cs = (gpio_num_t)CONFIG_PULSOPNAAT_SD_SPI_CS_GPIO;
@@ -288,6 +296,14 @@ static void tarefa_storage(void *arg)
         if (xQueueReceive(s_fila, &reg, portMAX_DELAY) != pdTRUE) {
             continue;
         }
+        if (!s_sd_montado &&
+            esp_timer_get_time() - s_ultima_montagem_us >= REMONTAGEM_INTERVALO_US) {
+            s_ultima_montagem_us = esp_timer_get_time();
+            s_sd_montado = (montar_sd() == ESP_OK);
+            if (s_sd_montado) {
+                ESP_LOGI(TAG, "microSD montado em nova tentativa — log retomado");
+            }
+        }
         if (!s_sd_montado) {
             if (++s_descartes_desde_log >= LOG_DESCARTE_A_CADA) {
                 ESP_LOGW(TAG, "cartão indisponível — %u registros descartados",
@@ -359,6 +375,7 @@ esp_err_t storage_init(i2c_master_bus_handle_t bus_handle)
     /* Cartão e RTC são independentes: falha em um não impede o outro nem
      * aborta o boot (degradação, não erro fatal — RF12/RNF09). */
     s_sd_montado = (montar_sd() == ESP_OK);
+    s_ultima_montagem_us = esp_timer_get_time();
 
     if (bus_handle != NULL) {
         s_rtc_ok = (ds3231_init(bus_handle, &s_rtc_dev) == ESP_OK);
@@ -380,6 +397,14 @@ esp_err_t storage_init(i2c_master_bus_handle_t bus_handle)
 bool storage_disponivel(void)
 {
     return s_sd_montado;
+}
+
+esp_err_t storage_ajustar_rtc(const struct tm *utc)
+{
+    if (!s_rtc_ok || utc == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ds3231_set_time(s_rtc_dev, utc);
 }
 
 void storage_log_janela(const storage_registro_t *reg)

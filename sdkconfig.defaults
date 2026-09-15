@@ -18,6 +18,9 @@ CONFIG_PULSOPNAAT_BOTAO_CALIBRACAO_GPIO=0
 CONFIG_PARTITION_TABLE_SINGLE_APP=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 
+# Nomes de log (log_AAAAMMDD_HHMMSS.csv) não cabem em 8.3: sem LFN o fopen falha com EINVAL
+CONFIG_FATFS_LFN_HEAP=y
+
 # 4. Configurações de Rede (Deixadas em BRANCO por segurança)
 # Cada desenvolvedor preencherá isso localmente no menuconfig
 CONFIG_WIFI_SSID=""

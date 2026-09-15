@@ -5,9 +5,10 @@
 # componente (firmware principal e test_app).
 #
 # Pinagem SPI do módulo microSD do Kit Maker (Figura 01 do documento de
-# requisitos): módulo é BARE (sem regulador on-board) — alimentar em 3V3,
-# NUNCA 5V. O pino MISO do módulo costuma vir serigrafado "MOSO" — atenção
-# ao ligar.
+# requisitos): módulo tem regulador on-board (AMS1117) — alimentar em 5V.
+# Em 3V3 o cartão recebe ~2,2 V, responde aos primeiros comandos e morre no
+# ACMD41 (0x107 em sdmmc_init_ocr). O pino MISO do módulo costuma vir
+# serigrafado "MOSO" — atenção ao ligar.
 
 menu "PulsoPNAAT: Armazenamento (microSD + RTC DS3231)"
 

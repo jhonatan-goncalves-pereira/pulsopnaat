@@ -72,6 +72,11 @@ bool storage_disponivel(void);
  */
 void storage_log_janela(const storage_registro_t *reg);
 
+struct tm;
+
+/* Grava hora UTC confiável (ex.: SNTP) no DS3231. ESP_ERR_INVALID_STATE se o RTC não inicializou. */
+esp_err_t storage_ajustar_rtc(const struct tm *utc);
+
 #ifdef __cplusplus
 }
 #endif

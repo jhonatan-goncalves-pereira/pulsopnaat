@@ -102,3 +102,7 @@ mosquitto/data/*
 !mosquitto/data/.gitkeep
 mosquitto/log/*
 !mosquitto/log/.gitkeep
+
+# --- Scripts auxiliares locais e datasets capturados (não fazem parte do firmware) ---
+_tools/
+*.csv

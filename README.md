@@ -207,7 +207,7 @@ GPIOs 8-14 (rádio LoRa) e 17/18/21 (OLED).
 
 | microSD | ESP32-S3 | Sinal / nota |
 |---|---|---|
-| VCC | 3V3 | Módulo bare — nunca ligar em 5V |
+| VCC | 5V | Módulo tem regulador (AMS1117): em 3V3 o cartão recebe ~2,2 V e a inicialização falha no ACMD41 (`0x107`) |
 | GND | GND | Referência comum |
 | SCK | GPIO 33 | |
 | MOSI | GPIO 34 | |
@@ -514,6 +514,10 @@ barramento I2C do BNO085; sem RTC, cai para `boot+<segundos>`.
 **Onde/como:**
 
 - `/sdcard/pulso/log_<timestamp ou boot_ms>.csv`, append, sobrevive a reboot.
+- Hora do RTC acertada automaticamente via SNTP (`pool.ntp.org`) quando o Wi-Fi
+  conecta e ressincronizada a cada hora; sem rede, o DS3231 mantém a última hora boa.
+- Cartão ausente ou que falhou ao montar: a task de storage tenta montar de novo a
+  cada 10 s, então dá pra reencaixar o cartão sem reiniciar o nó.
 - Rotação por tempo (`CONFIG_PULSOPNAAT_LOG_ROTACAO_MIN`, default 15 min): cada
   arquivo cobre uma janela fixa — o histórico completo é a sequência de arquivos,
   não um único CSV gigante.

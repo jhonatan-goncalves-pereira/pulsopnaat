@@ -41,8 +41,8 @@ esp_err_t ds3231_get_time(i2c_master_dev_handle_t dev_handle, struct tm *tm_out)
 
 /*
  * Ajusta o RTC a partir de `tm_in` (campos tm_year..tm_sec; os demais são
- * ignorados). Uso: comando serial/MQTT "settime" (ver main.c) após obter
- * hora confiável (ex.: SNTP) — o DS3231 não se ajusta sozinho.
+ * ignorados). Chamado via storage_ajustar_rtc no callback de sync SNTP
+ * (main.c) — o DS3231 não se ajusta sozinho.
  */
 esp_err_t ds3231_set_time(i2c_master_dev_handle_t dev_handle, const struct tm *tm_in);
 

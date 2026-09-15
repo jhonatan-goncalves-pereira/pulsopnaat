@@ -20,6 +20,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h> /* strcasecmp — comandos serial insensíveis a caixa */
+#include <sys/time.h>
+#include <time.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -29,6 +31,7 @@
 #include "driver/uart.h"
 
 #include "esp_log.h"
+#include "esp_netif_sntp.h"
 #include "esp_timer.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
@@ -227,6 +230,20 @@ static void tarefa_conectividade(void *arg)
         while (xQueueReceive(s_fila_alertas, &ev, 0) == pdTRUE) {
             publicar_alerta(&ev);
         }
+    }
+}
+
+static void sntp_sincronizado(struct timeval *tv)
+{
+    struct tm utc;
+    gmtime_r(&tv->tv_sec, &utc);
+    esp_err_t err = storage_ajustar_rtc(&utc);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "RTC ajustado via SNTP: %04d-%02d-%02dT%02d:%02d:%02dZ",
+                 utc.tm_year + 1900, utc.tm_mon + 1, utc.tm_mday,
+                 utc.tm_hour, utc.tm_min, utc.tm_sec);
+    } else {
+        ESP_LOGW(TAG, "SNTP sincronizou, mas o RTC não foi ajustado (%s)", esp_err_to_name(err));
     }
 }
 
@@ -493,6 +510,13 @@ void app_main(void)
         return;
     }
     ESP_ERROR_CHECK(wifi_config_start());
+
+    // lwIP repete a tentativa até haver rede e ressincroniza a cada hora (CONFIG_LWIP_SNTP_UPDATE_DELAY)
+    esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+    sntp_cfg.sync_cb = sntp_sincronizado;
+    if (esp_netif_sntp_init(&sntp_cfg) != ESP_OK) {
+        ESP_LOGW(TAG, "SNTP não iniciou — RTC segue com a hora que tiver");
+    }
 
     ESP_ERROR_CHECK(alerta_servico_iniciar());
 
