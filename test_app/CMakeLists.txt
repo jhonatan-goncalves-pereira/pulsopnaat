@@ -16,6 +16,7 @@ set(EXTRA_COMPONENT_DIRS
     "${CMAKE_CURRENT_LIST_DIR}/../components/signal_processing"
     "${CMAKE_CURRENT_LIST_DIR}/../components/baseline"
     "${CMAKE_CURRENT_LIST_DIR}/../components/alert_manager"
-    "${CMAKE_CURRENT_LIST_DIR}/../components/mqtt_client")
+    "${CMAKE_CURRENT_LIST_DIR}/../components/mqtt_client"
+    "${CMAKE_CURRENT_LIST_DIR}/../components/anomaly_detector")
 
 project(test_app)

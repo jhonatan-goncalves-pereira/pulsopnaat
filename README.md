@@ -32,6 +32,7 @@ José Adiel Calixto Serafim · Lucas Vinicius Santos Leonel
 9. [Como operar](#9-como-operar) - calibrar, classificar, LED/buzzer, MQTT, demo
    - 9.5 [Data logging (microSD + RTC)](#95-data-logging-microsd--rtc--para-que-serve)
    - 9.6 [Observabilidade: MQTT → Grafana](#96-observabilidade-mqtt--grafana)
+   - 9.7 [Detector de anomalia (Edge AI em modo sombra)](#97-detector-de-anomalia-edge-ai-em-modo-sombra-54)
 10. [Como testar](#10-como-testar) - suíte Unity on-target
 11. [Critérios de sucesso (KPIs)](#11-critérios-de-sucesso-kpis)
 12. [Solução de problemas](#12-solução-de-problemas)
@@ -481,7 +482,7 @@ quantização em repouso) não flipam o alarme; falha real persiste e confirma e
 |---|---|---|
 | `pulsopnaat/alert` | nó → broker | `{"node":"...","ts_us":…,"estado":"...","rms_x":…,"rms_y":…,"rms_z":…}` ao confirmar atenção/crítico |
 | `pulsopnaat/status` | nó → broker | `{"node":"...","maquina":"...","equipamento":"...","baseline":true,"uptime_s":…}` ao conectar e sob comando |
-| `pulsopnaat/command` | broker → nó | `calibrar` ou `status` (comparação exata, `calibrar\n` não dispara) |
+| `pulsopnaat/command` | broker → nó | `calibrar`, `status` ou rótulo do dataset `saudavel` / `falha` / `sem_rotulo` (RF15, §9.7) — comparação exata, `calibrar\n` não dispara |
  
 Dados de conexão (host, porta, dashboard, todos os tópicos) em §7.1.
  
@@ -531,8 +532,8 @@ barramento I2C do BNO085; sem RTC, cai para `boot+<segundos>`.
 
 **Formato do CSV:**
 ´´´
-timestamp,node_id,estado_maquina,estado_equipamento,rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,...,thd_z
-2026-09-10T18:22:41Z,pulsopnaat-01,MONITORANDO,VERDE,0.0198,0.0018,...
+timestamp,node_id,estado_maquina,estado_equipamento,rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,...,thd_z,rotulo,score_anomalia,anomalia
+2026-09-15T21:09:30Z,pulsopnaat-01,MONITORANDO,VERDE,0.0224,0.0036,...,saudavel,1.8420,0
 ´´´
 
 ### 9.6 Observabilidade: MQTT → Grafana
@@ -561,6 +562,35 @@ Passo a passo pra reproduzir a visualização:
 3. Grafana → plugin **Infinity** (ou datasource CSV nativo) → aponta pro `.csv`.
 4. Série temporal com `timestamp` no eixo X e `rms_x`/`rms_y`/`rms_z` como séries;
    colorir por `estado_equipamento` pra visualizar a transição verde→vermelho.
+
+### 9.7 Detector de anomalia (Edge AI em modo sombra, §5.4)
+
+Complementa a votação por limiares com um detector não supervisionado: distância de
+Mahalanobis do vetor de 18 métricas contra a operação saudável do próprio equipamento.
+O treino é offline (Python + `numpy`, com os CSVs do cartão) e o ESP32 só calcula o score
+a cada janela. Roda em **modo sombra**: grava `score_anomalia`/`anomalia` no CSV e loga as
+transições, mas LED, buzzer e alertas MQTT continuam decididos pelos limiares até o
+relatório mostrar que o detector é melhor (portão de decisão da §5.4).
+
+Fluxo completo:
+
+1. Calibre o baseline com o equipamento em regime saudável (§9.1).
+2. Rotule a coleta (RF15), pela serial ou publicando em `pulsopnaat/command`:
+   `saudavel` e deixe rodando alguns minutos; `falha` e induza a falha (ex.: peso numa pá
+   do ventilador) por 1-2 min; `sem_rotulo` encerra a marcação.
+3. Tire o cartão e treine:
+   ```bash
+   python tools/classificador/treinar_detector.py F:/pulso
+   ```
+   Gera `components/anomaly_detector/modelo_anomalia.h` e
+   `tools/classificador/relatorio_detector.md` (matriz de confusão do detector × limiares,
+   taxa de falso positivo e o veredito do portão de decisão).
+4. `idf.py build flash`: o boot mostra `detector de anomalia embarcado (modo sombra)` e o
+   comando `status` passa a exibir `score`, `limiar` e `rotulo`.
+
+Parâmetros: `--quantil-limiar` (padrão 0,995 das distâncias de treino) e `--fracao-teste`
+(padrão: 30% finais das janelas saudáveis, em ordem cronológica). Sem treino, o
+`modelo_anomalia.h` é um placeholder e o firmware roda sem detector.
  ---
 ## 10. Como testar
  
@@ -579,6 +609,7 @@ idf.py -C test_app build flash monitor
 | `baseline` | `components/baseline/test/test_baseline.c` | Welford exato, coleta parcial/excedente, validação, serialização NVS (mágica/versão/CRC) |
 | `alert_manager` | `components/alert_manager/test/test_alert_manager.c` | Limiares 3σ/6σ, votação, pior eixo, máquina de estados, sinalização |
 | `mqtt_client` | `components/mqtt_client/test/test_mqtt_client.c` | Formatação dos payloads de alerta/status |
+| `anomaly_detector` | `components/anomaly_detector/test/test_anomaly_detector.c` | Ordem/transformação das features, Mahalanobis (identidade, escala, precisão cheia), limiar, defensivos, coerência do modelo embarcado |
  
 Nova suíte: criar `components/<comp>/test/test_<comp>.c` (API `TEST_ASSERT_*`, função
 `rodar_testes_<comp>()`) e registrá-la no runner

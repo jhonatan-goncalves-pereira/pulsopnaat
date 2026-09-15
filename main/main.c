@@ -17,6 +17,7 @@
  * Calibração SEMPRE comandada (botão/serial/MQTT — RF08), nunca automática no
  * boot; o nó só entra em MONITORANDO com baseline válido.
  */
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h> /* strcasecmp — comandos serial insensíveis a caixa */
@@ -38,6 +39,7 @@
 
 #include "alert_manager.h"
 #include "alerta_servico.h"
+#include "anomaly_detector.h"
 #include "baseline.h"
 #include "baseline_nvs.h"
 #include "i2c_config.h"
@@ -115,6 +117,26 @@ static baseline_calibracao_t s_calibracao;
  * prática; atraso de ms na visibilidade é inofensivo ao status. */
 static volatile bool s_baseline_presente;
 
+/* RF15: rótulo corrente do dataset — escrito por serial/MQTT, lido pelo processamento a cada janela. */
+static volatile rotulo_dataset_t s_rotulo_dataset = ROTULO_NENHUM;
+/* Último score do detector (modo sombra), só para o comando status. */
+static volatile float s_ultimo_score = NAN;
+
+static const char *nome_rotulo(rotulo_dataset_t r)
+{
+    switch (r) {
+    case ROTULO_SAUDAVEL: return "saudavel";
+    case ROTULO_FALHA:    return "falha";
+    default:              return "sem_rotulo";
+    }
+}
+
+static void definir_rotulo(rotulo_dataset_t r, const char *origem)
+{
+    s_rotulo_dataset = r;
+    ESP_LOGI(TAG, "RF15: rótulo do dataset = %s (via %s)", nome_rotulo(r), origem);
+}
+
 /* ------------------------- auxiliares de log ---------------------------- */
 /* Nomes de estado do protocolo/log vivem no módulo puro mqtt_payloads
  * (cobertos pelo corpus on-target); aqui só um alias curto. */
@@ -144,9 +166,28 @@ static void processar_linha(const char *linha)
                    s_baseline.media[METRICA_RMS][EIXO_Y], s_baseline.desvio_padrao[METRICA_RMS][EIXO_Y],
                    s_baseline.media[METRICA_RMS][EIXO_Z], s_baseline.desvio_padrao[METRICA_RMS][EIXO_Z]);
         }
+        const anomalia_modelo_t *modelo = anomalia_modelo_embarcado();
+        if (modelo != NULL) {
+            printf("detector (sombra): score=%.3f limiar=%.3f rotulo=%s\n",
+                   s_ultimo_score, modelo->limiar, nome_rotulo(s_rotulo_dataset));
+        } else {
+            printf("detector (sombra): sem modelo embarcado, rotulo=%s\n", nome_rotulo(s_rotulo_dataset));
+        }
         return;
     }
-    printf("comandos: calibrar | status\n");
+    if (strcasecmp(linha, "saudavel") == 0) {
+        definir_rotulo(ROTULO_SAUDAVEL, "serial");
+        return;
+    }
+    if (strcasecmp(linha, "falha") == 0) {
+        definir_rotulo(ROTULO_FALHA, "serial");
+        return;
+    }
+    if (strcasecmp(linha, "sem_rotulo") == 0) {
+        definir_rotulo(ROTULO_NENHUM, "serial");
+        return;
+    }
+    printf("comandos: calibrar | status | saudavel | falha | sem_rotulo\n");
 }
 
 /* Conectividade: callbacks WiFi/MQTT rodam em tasks do stack (loop de eventos
@@ -297,8 +338,14 @@ static void mqtt_data_received(const char *topic, const char *data, int data_len
         mqtt_enfileirar_comando(COMANDO_REDE_CALIBRAR);
     } else if (data_len == 6 && strncasecmp(data, "status", 6) == 0) {
         mqtt_enfileirar_comando(COMANDO_REDE_STATUS);
+    } else if (data_len == 8 && strncasecmp(data, "saudavel", 8) == 0) {
+        definir_rotulo(ROTULO_SAUDAVEL, "MQTT");
+    } else if (data_len == 5 && strncasecmp(data, "falha", 5) == 0) {
+        definir_rotulo(ROTULO_FALHA, "MQTT");
+    } else if (data_len == 10 && strncasecmp(data, "sem_rotulo", 10) == 0) {
+        definir_rotulo(ROTULO_NENHUM, "MQTT");
     } else {
-        ESP_LOGW(TAG, "comando MQTT desconhecido — ignorado (calibrar | status)");
+        ESP_LOGW(TAG, "comando MQTT desconhecido — ignorado (calibrar | status | saudavel | falha | sem_rotulo)");
     }
 }
 
@@ -362,6 +409,13 @@ static void tarefa_processamento(void *arg)
     metricas_t metricas;
     estado_maquina_t estado_visto = ESTADO_MAQ_BOOT;
     bool avisou_sem_baseline = false;
+    bool anomalia_vista = false;
+    const anomalia_modelo_t *modelo = anomalia_modelo_embarcado();
+    if (modelo != NULL) {
+        ESP_LOGI(TAG, "detector de anomalia embarcado (modo sombra), limiar=%.3f", modelo->limiar);
+    } else {
+        ESP_LOGW(TAG, "sem modelo de anomalia embarcado — treine com tools/classificador/treinar_detector.py");
+    }
 
     printf("# rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,h1x_y,h2x_y,b3x5_y,kurt_y,thd_y,rms_z,h1x_z,h2x_z,b3x5_z,kurt_z,thd_z\n");
     printf("# unidades: rms/h1x/h2x/b3x5 em m/s²; kurt e thd adimensionais; f0 = %.3f Hz (RPM nominal %d)\n", f0_hz, CONFIG_PULSOPNAAT_RPM_NOMINAL);
@@ -390,11 +444,23 @@ static void tarefa_processamento(void *arg)
         /* RF12: registra a janela no cartão (task dedicada, não-bloqueante —
          * RNF09). BOOT ainda não tem métrica útil (sem baseline, aguardando
          * calibração) — não gera ruído no log antes disso. */
+        const float score = anomalia_score(modelo, &metricas);
+        const bool anomalia = anomalia_eh_anomalia(modelo, score);
+        s_ultimo_score = score;
+        if (anomalia != anomalia_vista && estado != ESTADO_MAQ_BOOT) {
+            ESP_LOGI(TAG, "detector (sombra): %s (score=%.2f limiar=%.2f)",
+                     anomalia ? "ANOMALIA" : "normal", score, modelo->limiar);
+            anomalia_vista = anomalia;
+        }
+
         if (estado != ESTADO_MAQ_BOOT) {
             const storage_registro_t reg_sd = {
                 .estado_maquina = estado,
                 .estado_equipamento = alerta_servico_estado_equipamento(),
                 .metricas = metricas,
+                .rotulo = s_rotulo_dataset,
+                .score_anomalia = score,
+                .anomalia = anomalia,
             };
             storage_log_janela(&reg_sd);
         }

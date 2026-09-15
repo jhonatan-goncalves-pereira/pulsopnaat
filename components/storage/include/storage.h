@@ -42,10 +42,20 @@
 extern "C" {
 #endif
 
+/* RF15: rótulo de campo gravado em cada linha, para uso como dado supervisionado. */
+typedef enum {
+    ROTULO_NENHUM = 0,
+    ROTULO_SAUDAVEL,
+    ROTULO_FALHA,
+} rotulo_dataset_t;
+
 typedef struct {
     estado_maquina_t estado_maquina;
     estado_equipamento_t estado_equipamento;
     metricas_t metricas; /* 18 valores: 6 métricas × 3 eixos */
+    rotulo_dataset_t rotulo;
+    float score_anomalia; /* Mahalanobis; NAN sem modelo embarcado */
+    bool anomalia;        /* detector em modo sombra: score acima do limiar */
 } storage_registro_t;
 
 /*
