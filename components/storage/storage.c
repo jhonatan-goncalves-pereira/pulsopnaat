@@ -208,8 +208,12 @@ static void podar_logs_antigos_se_necessario(void)
             return;
         }
 
-        char caminho[224];
-        snprintf(caminho, sizeof(caminho), "%s/%s", dir, mais_antigo);
+char caminho[sizeof(dir) + sizeof(mais_antigo) + 2]; // +1 '/' +1 '\0'
+int n = snprintf(caminho, sizeof(caminho), "%s/%s", dir, mais_antigo);
+if (n < 0 || (size_t)n >= sizeof(caminho)) {
+    ESP_LOGW(TAG, "Caminho truncado ao podar log antigo, pulando");
+    return;
+}
         if (remove(caminho) != 0) {
             ESP_LOGW(TAG, "poda: falha ao apagar %s (%s)", caminho, strerror(errno));
             return;
