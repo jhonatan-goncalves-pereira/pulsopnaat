@@ -1,0 +1,16 @@
+instante_mensagem_utc,estado_informado
+2026-09-16T20:00:15Z,vel1 (antes: vel2)
+2026-09-16T20:01:08Z,vel3
+2026-09-16T20:03:18Z,parado
+2026-09-16T20:04:02Z,vel3
+2026-09-16T20:06:16Z,vel2
+2026-09-16T20:08:26Z,vel1
+2026-09-16T20:10:22Z,vel3
+2026-09-16T20:12:33Z,parado
+2026-09-16T20:14:40Z,vel1
+2026-09-16T20:17:42Z,falha (vel1 no filtro de linha)
+2026-09-16T20:20:29Z,falha (vel2 no filtro de linha)
+2026-09-16T20:23:39Z,falha (vel3 no filtro de linha)
+2026-09-16T20:31:28Z,parado
+2026-09-16T20:38:48Z,vel2 (tomada normal)
+2026-09-16T20:43:25Z,parado

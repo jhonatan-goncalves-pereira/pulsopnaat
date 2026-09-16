@@ -59,15 +59,19 @@ size_t mqtt_formatar_status(char *out, size_t out_len, const char *node_id,
  * Telemetria por janela (consumida pelo Telegraf → InfluxDB → Grafana):
  *   {"node":"...","ts_us":<i64>,"maquina":"...","equipamento":"...","nivel":0|1|2|-1,
  *    "rms_x":..,"h1x_x":..,"h2x_x":..,"b3x5_x":..,"kurt_x":..,"thd_x":.., (idem y, z),
- *    "score":<f>|null,"anomalia":0|1,"rotulo":"..."}
+ *    "score":<f>|null,"anomalia":0|1,"rotulo":"...",
+ *    "regime":<i>,"dist_regime":<f>|null,"nivel_limiares":0|1|2|-1}
  * `nivel` é o estado do equipamento em número (verde 0, amarelo 1, vermelho 2) para colorir
- * no Grafana; `score` não finito sai como null; `rotulo` NULL vira "sem_rotulo".
+ * no Grafana; `nivel_limiares` é a opinião só dos limiares média+kσ (-1 quando não calculada),
+ * para comparar com o modelo treinado. `regime`: 0 parado, 1..3 velocidade, -1 sem modelo.
+ * Floats não finitos saem como null; `rotulo` NULL vira "sem_rotulo".
  * Mesmo contrato de retorno do alerta.
  */
 size_t mqtt_formatar_telemetria(char *out, size_t out_len, const char *node_id, int64_t ts_us,
                                 estado_maquina_t maquina, estado_equipamento_t equipamento,
                                 const metricas_t *metricas, float score, bool anomalia,
-                                const char *rotulo);
+                                const char *rotulo, int regime, float distancia_regime,
+                                estado_equipamento_t estado_limiares);
 
 #ifdef __cplusplus
 }

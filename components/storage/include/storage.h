@@ -42,20 +42,32 @@
 extern "C" {
 #endif
 
-/* RF15: rótulo de campo gravado em cada linha, para uso como dado supervisionado. */
+/* RF15: rótulo de campo gravado em cada linha, para uso como dado supervisionado.
+ * PARADO/VEL1..VEL3 dizem o regime saudável declarado pelo operador (gabarito do
+ * regime_classifier); SAUDAVEL fica para equipamentos sem regimes distintos. */
 typedef enum {
     ROTULO_NENHUM = 0,
     ROTULO_SAUDAVEL,
     ROTULO_FALHA,
+    ROTULO_PARADO,
+    ROTULO_VEL1,
+    ROTULO_VEL2,
+    ROTULO_VEL3,
 } rotulo_dataset_t;
+
+/* Token do rótulo no CSV, na telemetria e nos comandos: "parado", "vel1", ... "sem_rotulo". */
+const char *storage_nome_rotulo(rotulo_dataset_t r);
 
 typedef struct {
     estado_maquina_t estado_maquina;
-    estado_equipamento_t estado_equipamento;
+    estado_equipamento_t estado_equipamento; /* estado efetivo (LED/alerta) */
     metricas_t metricas; /* 18 valores: 6 métricas × 3 eixos */
     rotulo_dataset_t rotulo;
     float score_anomalia; /* Mahalanobis; NAN sem modelo embarcado */
     bool anomalia;        /* detector em modo sombra: score acima do limiar */
+    int regime;                /* regime reconhecido pelo modelo; -1 sem modelo */
+    float distancia_regime;    /* Mahalanobis ao regime reconhecido; NAN sem modelo */
+    estado_equipamento_t estado_limiares; /* opinião só dos limiares média+kσ */
 } storage_registro_t;
 
 /*

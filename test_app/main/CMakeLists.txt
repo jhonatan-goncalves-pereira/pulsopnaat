@@ -6,5 +6,6 @@ idf_component_register(
          "../../components/mqtt_client/test/test_mqtt_client.c"
          "../../components/anomaly_detector/test/test_anomaly_detector.c"
          "../../components/mqtt_client/test/test_mqtt_telemetria.c"
-    PRIV_REQUIRES unity signal_processing baseline alert_manager mqtt_client anomaly_detector
+         "../../components/regime_classifier/test/test_regime_classifier.c"
+    PRIV_REQUIRES unity signal_processing baseline alert_manager mqtt_client anomaly_detector regime_classifier
 )

@@ -16,6 +16,7 @@ extern void rodar_testes_alert_manager(void);
 extern void rodar_testes_mqtt_client(void);
 extern void rodar_testes_anomaly_detector(void);
 extern void rodar_testes_mqtt_telemetria(void);
+extern void rodar_testes_regime_classifier(void);
 
 void app_main(void)
 {
@@ -30,6 +31,7 @@ void app_main(void)
     rodar_testes_mqtt_client();
     rodar_testes_anomaly_detector();
     rodar_testes_mqtt_telemetria();
+    rodar_testes_regime_classifier();
     UNITY_END();
     /* Resumo já no serial; sistema permanece vivo em idle para leitura
      * tranquila do monitor. */
