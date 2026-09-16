@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="docs/img/fit_logo.png" alt="FIT — Fundação de apoio à tecnologia" width="auto">
+  <img src="docs/img/pulsopnaat_cabecalho.png" alt="FIT · PulsoPNAAT — Sistema Embarcado de Manutenção Preditiva por Análise de Vibração" width="100%">
 
 </p>
 

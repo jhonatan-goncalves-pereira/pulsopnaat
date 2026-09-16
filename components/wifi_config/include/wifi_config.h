@@ -1,3 +1,11 @@
+/*
+ * wifi_config — conexão Wi-Fi station do nó (PulsoPNAAT).
+ *
+ * SSID, senha, número de tentativas e modo mínimo de autenticação vêm do
+ * Kconfig (menu "WiFi Configuration"). A rede precisa ser 2,4 GHz: o ESP32-S3
+ * não opera em 5 GHz. A aplicação só observa estados pelo callback; sem rede
+ * o monitoramento local continua (máquina em CONTINGÊNCIA, ver alert_manager).
+ */
 #ifndef WIFI_CONFIG_H
 #define WIFI_CONFIG_H
 

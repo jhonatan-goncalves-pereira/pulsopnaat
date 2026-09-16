@@ -1,3 +1,6 @@
+# Configuração do componente wifi_config (PulsoPNAAT): credenciais da rede 2,4 GHz,
+# tentativas imediatas de reconexão e modo mínimo de autenticação aceito.
+# SSID vazio impede o boot da conectividade: preencher em idf.py menuconfig.
 menu "WiFi Configuration"
 
     config WIFI_SSID

@@ -1,3 +1,12 @@
+/*
+ * wifi_config — Wi-Fi em modo station com reconexão automática (ver header).
+ *
+ * Traduz os eventos do ESP-IDF em estados simples (CONNECTING, DISCONNECTED,
+ * GOT_IP, FAILED) entregues à aplicação por callback. Na queda, faz até
+ * CONFIG_WIFI_MAX_RETRY tentativas imediatas; esgotadas, reporta FAILED e
+ * agenda nova rodada a cada 30 s por esp_timer (RNF05), então o nó nunca
+ * desiste da rede. SSID vazio no menuconfig faz wifi_config_start() falhar.
+ */
 #include "wifi_config.h"
 
 #include <string.h>

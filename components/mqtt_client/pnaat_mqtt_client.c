@@ -1,3 +1,13 @@
+/*
+ * pnaat_mqtt_client — transporte MQTT sobre o esp-mqtt (ver header).
+ *
+ * Conecta ao broker de CONFIG_MQTT_BROKER_URI, assina pulsopnaat/command ao
+ * conectar e repassa os eventos à aplicação por dois callbacks: mudança de
+ * estado (conectado, inscrito, desconectado, erro) e dado recebido (tópico e
+ * payload copiados com terminador NUL). Os callbacks rodam na task do
+ * esp-mqtt: não bloquear neles. Quem publica alertas, status e telemetria é a
+ * task de conectividade do app_main; o JSON é montado em mqtt_payloads.c.
+ */
 #include "pnaat_mqtt_client.h"
 #include "esp_log.h"
 #include "esp_event.h"

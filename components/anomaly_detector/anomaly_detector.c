@@ -1,3 +1,12 @@
+/*
+ * anomaly_detector — inferência do detector de anomalia (ver anomaly_detector.h).
+ *
+ * Por janela: 18 métricas → transformação log (mesmas constantes do treino em
+ * tools/classificador/treinar_detector.py) → padronização pela média/escala do
+ * modelo → distância de Mahalanobis √(zᵀ·P·z) com a matriz de precisão gerada
+ * em modelo_anomalia.h. Sem modelo treinado, anomalia_modelo_embarcado()
+ * devolve NULL e o score sai NaN (detector desligado).
+ */
 #include "anomaly_detector.h"
 
 #include <math.h>
