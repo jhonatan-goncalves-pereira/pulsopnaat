@@ -275,13 +275,13 @@ void test_maquina_monitorando_contingencia(void)
                       transitar(ESTADO_MAQ_CONTINGENCIA, EVENTO_WIFI_CAIR));
 }
 
-/* 14. Recalibração comandada; comando ignorado na contingência. */
+/* 14. Recalibração comandada, inclusive na contingência (RF08: calibração é local). */
 void test_maquina_recalibracao(void)
 {
     preparar();
     TEST_ASSERT_EQUAL(ESTADO_MAQ_CALIBRANDO,
                       transitar(ESTADO_MAQ_MONITORANDO, EVENTO_INICIAR_CALIBRACAO));
-    TEST_ASSERT_EQUAL(ESTADO_MAQ_CONTINGENCIA,
+    TEST_ASSERT_EQUAL(ESTADO_MAQ_CALIBRANDO,
                       transitar(ESTADO_MAQ_CONTINGENCIA, EVENTO_INICIAR_CALIBRACAO));
 }
 
