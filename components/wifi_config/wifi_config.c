@@ -1,3 +1,12 @@
+/*
+ * wifi_config — Wi-Fi em modo station com reconexão automática (ver header).
+ *
+ * Traduz os eventos do ESP-IDF em estados simples (CONNECTING, DISCONNECTED,
+ * GOT_IP, FAILED) entregues à aplicação por callback. Na queda, faz até
+ * CONFIG_WIFI_MAX_RETRY tentativas imediatas; esgotadas, reporta FAILED e
+ * agenda nova rodada a cada 30 s por esp_timer (RNF05), então o nó nunca
+ * desiste da rede. SSID vazio no menuconfig faz wifi_config_start() falhar.
+ */
 #include "wifi_config.h"
 
 #include <string.h>
@@ -5,11 +14,29 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 
 static const char *TAG = "wifi_config";
 static wifi_state_t s_current_state = WIFI_STATE_DISCONNECTED;
 static wifi_state_callback_t s_state_callback = NULL;
 static int s_retry_count = 0;
+
+/* RNF05: depois de esgotar as tentativas imediatas, nova rodada a cada 30 s até a rede voltar. */
+#define WIFI_RECONEXAO_PERIODO_US (30LL * 1000000LL)
+static esp_timer_handle_t s_reconexao_timer;
+
+static void reconexao_timer_cb(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "RNF05: nova rodada de reconexão ao Wi-Fi");
+    s_retry_count = 0;
+    s_current_state = WIFI_STATE_CONNECTING;
+    esp_err_t err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "esp_wifi_connect falhou: %s — reagendando", esp_err_to_name(err));
+        esp_timer_start_once(s_reconexao_timer, WIFI_RECONEXAO_PERIODO_US);
+    }
+}
 
 // Event handlers
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -33,6 +60,12 @@ esp_err_t wifi_config_init(void)
         WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, NULL));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, NULL));
+
+    const esp_timer_create_args_t timer_args = {
+        .callback = reconexao_timer_cb,
+        .name = "wifi_reconexao",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_reconexao_timer));
 
     ESP_LOGI(TAG, "WiFi config initialized");
     return ESP_OK;
@@ -135,8 +168,9 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                     }
                 } else {
                     s_current_state = WIFI_STATE_FAILED;
-                    ESP_LOGE(TAG, "WiFi falhou após %d tentativas — aguardando nova chamada a wifi_config_start()",
-                             s_retry_count);
+                    ESP_LOGE(TAG, "WiFi falhou após %d tentativas — nova rodada em %lld s (RNF05)",
+                             s_retry_count, (long long)(WIFI_RECONEXAO_PERIODO_US / 1000000LL));
+                    esp_timer_start_once(s_reconexao_timer, WIFI_RECONEXAO_PERIODO_US);
                     if (s_state_callback) {
                         s_state_callback(s_current_state);
                     }

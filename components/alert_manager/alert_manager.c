@@ -175,8 +175,11 @@ estado_maquina_t transitar(estado_maquina_t estado, evento_t evento)
         if (evento == EVENTO_WIFI_RESTAURADO) {
             return ESTADO_MAQ_MONITORANDO;
         }
-        /* WIFI_CAIR repetido e INICIAR_CALIBRACAO ignorados (o diagrama da
-         * SPEC entra em CALIBRANDO apenas por BOOT/MONITORANDO). */
+        /* RF08: calibrar é local e não depende de rede. Sem Wi-Fi, a próxima
+         * rodada de reconexão (RNF05) devolve a máquina à contingência. */
+        if (evento == EVENTO_INICIAR_CALIBRACAO) {
+            return ESTADO_MAQ_CALIBRANDO;
+        }
         return ESTADO_MAQ_CONTINGENCIA;
 
     default:

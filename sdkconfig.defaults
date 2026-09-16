@@ -15,11 +15,15 @@ CONFIG_PULSOPNAAT_BUZZER_GPIO=42
 CONFIG_PULSOPNAAT_BOTAO_CALIBRACAO_GPIO=0
 
 # 3. Configurações de Build e Partição
-CONFIG_PARTITION_TABLE_SINGLE_APP=y
+# Firmware completo (Wi-Fi + MQTT + FATFS) passa de 1 MB: a tabela "large" reserva 1,5 MB para o app
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
 CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
 
 # Nomes de log (log_AAAAMMDD_HHMMSS.csv) não cabem em 8.3: sem LFN o fopen falha com EINVAL
 CONFIG_FATFS_LFN_HEAP=y
+
+# Callbacks de Wi-Fi/IP rodam na task sys_evt; 2304 B (padrão) não comporta os logs da reconexão (RNF05)
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 
 # 4. Configurações de Rede (Deixadas em BRANCO por segurança)
 # Cada desenvolvedor preencherá isso localmente no menuconfig

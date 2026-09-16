@@ -1,3 +1,5 @@
+# Carrega todo JSON de ./json na pasta PulsoPNAAT do Grafana (releitura a cada 10 s).
+# Principal: pulsopnaat-monitoramento.json (uid pulsopnaat-monitor).
 apiVersion: 1
 
 providers:

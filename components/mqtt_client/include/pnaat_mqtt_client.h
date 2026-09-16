@@ -1,3 +1,12 @@
+/*
+ * pnaat_mqtt_client — cliente MQTT do nó (PulsoPNAAT).
+ *
+ * Camada fina sobre o esp-mqtt: init/start/stop, publish/subscribe e
+ * callbacks de estado e de dados. Broker, prioridade da task e tamanho do
+ * buffer vêm do Kconfig (menu "MQTT Client Configuration"). O prefixo pnaat_
+ * distingue este header do mqtt_client.h do ESP-IDF, incluído logo abaixo.
+ * O tópico pulsopnaat/telemetria é definido em main/main.c.
+ */
 #ifndef MQTT_CLIENT_H
 #define MQTT_CLIENT_H
 
@@ -10,6 +19,7 @@
 #define MQTT_CLIENT_BUFFER_SIZE     CONFIG_MQTT_BUFFER_SIZE
 
 // Tópicos padrão do projeto Pulsopnaat
+// sensor/data: reservado, o firmware atual não publica nele (dados por janela saem em pulsopnaat/telemetria)
 #define MQTT_TOPIC_SENSOR_DATA      "pulsopnaat/sensor/data"
 #define MQTT_TOPIC_ALERT            "pulsopnaat/alert"
 #define MQTT_TOPIC_STATUS           "pulsopnaat/status"

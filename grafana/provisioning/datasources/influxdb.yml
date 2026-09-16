@@ -1,3 +1,5 @@
+# Datasource InfluxDB (Flux) provisionado no boot do Grafana. uid fixo pulsopnaat-influxdb:
+# os dashboards em ../dashboards/json referenciam esse uid. Org, bucket e token vêm do .env.
 apiVersion: 1
 
 datasources:

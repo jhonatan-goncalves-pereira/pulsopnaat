@@ -106,3 +106,5 @@ mosquitto/log/*
 # --- Scripts auxiliares locais e datasets capturados (não fazem parte do firmware) ---
 _tools/
 *.csv
+# Exceção: dataset rotulado do ventilador da bancada é entregável (treino do regime_classifier)
+!dataset/**/*.csv

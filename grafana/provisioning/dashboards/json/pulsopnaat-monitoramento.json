@@ -1,0 +1,780 @@
+{
+  "uid": "pulsopnaat-monitor",
+  "title": "PulsoPNAAT — Monitoramento em tempo real",
+  "tags": [
+    "pulsopnaat"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 3,
+  "editable": true,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Velocidade atual (reconhecida pelo modelo)",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 7,
+        "h": 6
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"regime\")\n  |> last()\n  |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#6e6e6e"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "SEM MODELO",
+                  "color": "#6e6e6e",
+                  "index": 0
+                },
+                "0": {
+                  "text": "PARADO",
+                  "color": "#8f8f8f",
+                  "index": 1
+                },
+                "1": {
+                  "text": "VELOCIDADE 1",
+                  "color": "#8ab8ff",
+                  "index": 2
+                },
+                "2": {
+                  "text": "VELOCIDADE 2",
+                  "color": "#3274d9",
+                  "index": 3
+                },
+                "3": {
+                  "text": "VELOCIDADE 3",
+                  "color": "#1f3fa8",
+                  "index": 4
+                },
+                "4": {
+                  "text": "FALHA DE ALIMENTAÇÃO",
+                  "color": "red",
+                  "index": 5
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Saúde do equipamento (LED e alertas)",
+      "gridPos": {
+        "x": 7,
+        "y": 0,
+        "w": 7,
+        "h": 6
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"nivel\")\n  |> last()\n  |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#6e6e6e"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "—",
+                  "color": "#6e6e6e",
+                  "index": 0
+                },
+                "0": {
+                  "text": "SAUDÁVEL",
+                  "color": "green",
+                  "index": 1
+                },
+                "1": {
+                  "text": "ATENÇÃO",
+                  "color": "yellow",
+                  "index": 2
+                },
+                "2": {
+                  "text": "CRÍTICO",
+                  "color": "red",
+                  "index": 3
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Máquina de estados",
+      "gridPos": {
+        "x": 14,
+        "y": 0,
+        "w": 5,
+        "h": 6
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"maquina\")\n  |> last()\n  |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "CONTINGENCIA": {
+                  "text": "CONTINGÊNCIA (sem rede)",
+                  "color": "orange",
+                  "index": 0
+                },
+                "CALIBRANDO": {
+                  "text": "CALIBRANDO",
+                  "color": "blue",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Limiares antigos (calibração única, só comparação)",
+      "gridPos": {
+        "x": 19,
+        "y": 0,
+        "w": 5,
+        "h": 6
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"nivel_limiares\")\n  |> last()\n  |> keep(columns: [\"_value\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#6e6e6e"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "—",
+                  "color": "#6e6e6e",
+                  "index": 0
+                },
+                "0": {
+                  "text": "SAUDÁVEL",
+                  "color": "green",
+                  "index": 1
+                },
+                "1": {
+                  "text": "ATENÇÃO",
+                  "color": "yellow",
+                  "index": 2
+                },
+                "2": {
+                  "text": "CRÍTICO",
+                  "color": "red",
+                  "index": 3
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "/.*/",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center"
+      }
+    },
+    {
+      "id": 12,
+      "type": "state-timeline",
+      "title": "Velocidade reconhecida pelo modelo (e rótulo informado, quando houver)",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"regime\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Reconhecida\"})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"rotulo\")\n  |> filter(fn: (r) => r._value != \"sem_rotulo\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Informada\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#6e6e6e"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "SEM MODELO",
+                  "color": "#6e6e6e",
+                  "index": 0
+                },
+                "0": {
+                  "text": "PARADO",
+                  "color": "#8f8f8f",
+                  "index": 1
+                },
+                "1": {
+                  "text": "VELOCIDADE 1",
+                  "color": "#8ab8ff",
+                  "index": 2
+                },
+                "2": {
+                  "text": "VELOCIDADE 2",
+                  "color": "#3274d9",
+                  "index": 3
+                },
+                "3": {
+                  "text": "VELOCIDADE 3",
+                  "color": "#1f3fa8",
+                  "index": 4
+                },
+                "parado": {
+                  "text": "PARADO",
+                  "color": "#8f8f8f",
+                  "index": 5
+                },
+                "vel1": {
+                  "text": "VELOCIDADE 1",
+                  "color": "#8ab8ff",
+                  "index": 6
+                },
+                "vel2": {
+                  "text": "VELOCIDADE 2",
+                  "color": "#3274d9",
+                  "index": 7
+                },
+                "vel3": {
+                  "text": "VELOCIDADE 3",
+                  "color": "#1f3fa8",
+                  "index": 8
+                },
+                "falha": {
+                  "text": "FALHA INDUZIDA",
+                  "color": "red",
+                  "index": 9
+                },
+                "saudavel": {
+                  "text": "SAUDÁVEL",
+                  "color": "green",
+                  "index": 10
+                },
+                "sem_rotulo": {
+                  "text": "sem rótulo",
+                  "color": "#6e6e6e",
+                  "index": 11
+                },
+                "4": {
+                  "text": "FALHA DE ALIMENTAÇÃO",
+                  "color": "red",
+                  "index": 12
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "auto",
+        "mergeValues": true,
+        "rowHeight": 0.85,
+        "alignValue": "center",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "state-timeline",
+      "title": "Saúde: modelo treinado (LED e alertas) × limiares antigos",
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"nivel\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Modelo (LED)\"})"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"nivel_limiares\")\n  |> keep(columns: [\"_time\", \"_value\"])\n  |> rename(columns: {_value: \"Limiares antigos\"})"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "#6e6e6e"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "—",
+                  "color": "#6e6e6e",
+                  "index": 0
+                },
+                "0": {
+                  "text": "SAUDÁVEL",
+                  "color": "green",
+                  "index": 1
+                },
+                "1": {
+                  "text": "ATENÇÃO",
+                  "color": "yellow",
+                  "index": 2
+                },
+                "2": {
+                  "text": "CRÍTICO",
+                  "color": "red",
+                  "index": 3
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "auto",
+        "mergeValues": true,
+        "rowHeight": 0.85,
+        "alignValue": "center",
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "RMS por eixo",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\")\n  |> filter(fn: (r) => r._field == \"rms_x\" or r._field == \"rms_y\" or r._field == \"rms_z\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "accMS2",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Distância à assinatura da velocidade atual (Mahalanobis)",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\" and r._field == \"dist_regime\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": false,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Harmônica 1x por eixo (desbalanceamento)",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\")\n  |> filter(fn: (r) => r._field == \"h1x_x\" or r._field == \"h1x_y\" or r._field == \"h1x_z\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "accMS2",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Kurtosis por eixo (impactos)",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_telemetria\")\n  |> filter(fn: (r) => r._field == \"kurt_x\" or r._field == \"kurt_y\" or r._field == \"kurt_z\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> keep(columns: [\"_time\", \"_value\", \"_field\"])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "table",
+      "title": "Alertas confirmados (pulsopnaat/alert)",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "influxdb",
+        "uid": "pulsopnaat-influxdb"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "influxdb",
+            "uid": "pulsopnaat-influxdb"
+          },
+          "query": "from(bucket: \"mqtt_data\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"pulsopnaat_alert\")\n  |> filter(fn: (r) => r._field == \"estado\" or r._field == \"rms_x\" or r._field == \"rms_y\" or r._field == \"rms_z\")\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> group()\n  |> keep(columns: [\"_time\", \"estado\", \"rms_x\", \"rms_y\", \"rms_z\"])\n  |> sort(columns: [\"_time\"], desc: true)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "estado"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^amarelo.*",
+                      "result": {
+                        "color": "yellow",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "regex",
+                    "options": {
+                      "pattern": "^vermelho.*",
+                      "result": {
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    }
+  ]
+}

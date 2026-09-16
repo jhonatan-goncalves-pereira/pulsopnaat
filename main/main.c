@@ -17,6 +17,7 @@
  * Calibração SEMPRE comandada (botão/serial/MQTT — RF08), nunca automática no
  * boot; o nó só entra em MONITORANDO com baseline válido.
  */
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h> /* strcasecmp — comandos serial insensíveis a caixa */
@@ -38,10 +39,12 @@
 
 #include "alert_manager.h"
 #include "alerta_servico.h"
+#include "anomaly_detector.h"
 #include "baseline.h"
 #include "baseline_nvs.h"
 #include "i2c_config.h"
 #include "mqtt_payloads.h"
+#include "regime_classifier.h"
 #include "signal_processing.h"
 #include "storage.h"
 #include "vibration_sensor.h"
@@ -70,7 +73,7 @@ static const char *TAG = "app_main";
 /* Conectividade roda em contexto de aplicação (core 1, prioridade baixa). */
 #define TAREFA_CONECTIVIDADE_CORE 1
 #define TAREFA_CONECTIVIDADE_PRIORIDADE 2
-#define TAREFA_CONECTIVIDADE_STACK 4096
+#define TAREFA_CONECTIVIDADE_STACK 6144
 /* Poll da conectividade: drena comandos + alertas e trata o start do MQTT.
  * 100 ms acompanha o tick de LED sem atrasar o anúncio de alertas. */
 #define CONECTIVIDADE_POLL_MS 100
@@ -82,6 +85,24 @@ static const char *TAG = "app_main";
  * ajustá-los por equipamento. */
 #define FILA_ALERTAS_PROFUNDIDADE 4
 #define FILA_COMANDOS_PROFUNDIDADE 4
+
+/* Telemetria por janela (RF09 → Telegraf/Grafana). Fila de 1 posição com
+ * sobrescrita: só a janela mais recente importa, nunca bloqueia o DSP. */
+#define MQTT_TOPIC_TELEMETRIA "pulsopnaat/telemetria"
+#define PAYLOAD_TELEMETRIA_BUF_TAM 640
+
+typedef struct {
+    int64_t ts_us;
+    estado_maquina_t maquina;
+    estado_equipamento_t equipamento;
+    metricas_t metricas;
+    float score;
+    bool anomalia;
+    rotulo_dataset_t rotulo;
+    int regime;
+    float distancia_regime;
+    estado_equipamento_t estado_limiares;
+} telemetria_evento_t;
 
 /* Evento de classificação (processamento → conectividade, item 1): o DSP
  * nunca formata nem publica — só classifica e enfileira (non-blocking). */
@@ -105,6 +126,7 @@ typedef struct {
 static QueueHandle_t s_fila_janelas;
 static QueueHandle_t s_fila_alertas;
 static QueueHandle_t s_fila_comandos;
+static QueueHandle_t s_fila_telemetria;
 
 /* Baseline vigente + acumulador da calibração — só a task de processamento
  * toca (single-consumer, como o buffer de janela). */
@@ -114,6 +136,42 @@ static baseline_calibracao_t s_calibracao;
  * processamento (após o init no app_main): bool alinhado, escrita atômica na
  * prática; atraso de ms na visibilidade é inofensivo ao status. */
 static volatile bool s_baseline_presente;
+
+/* RF15: rótulo corrente do dataset — escrito por serial/MQTT, lido pelo processamento a cada janela. */
+static volatile rotulo_dataset_t s_rotulo_dataset = ROTULO_NENHUM;
+/* Último score do detector (modo sombra), só para o comando status. */
+static volatile float s_ultimo_score = NAN;
+/* Último regime reconhecido (já filtrado) e distância, só para o comando status. */
+static volatile int s_ultimo_regime = REGIME_DESCONHECIDO;
+static volatile float s_ultima_distancia_regime = NAN;
+
+#define nome_rotulo(r) storage_nome_rotulo(r)
+
+/* Rótulos aceitos pela serial e pelo MQTT (RF15): o texto é o próprio token gravado. */
+static const rotulo_dataset_t ROTULOS_COMANDO[] = {
+    ROTULO_PARADO, ROTULO_VEL1, ROTULO_VEL2, ROTULO_VEL3,
+    ROTULO_SAUDAVEL, ROTULO_FALHA, ROTULO_NENHUM,
+};
+#define AJUDA_COMANDOS "calibrar | status | parado | vel1 | vel2 | vel3 | saudavel | falha | sem_rotulo"
+
+/* Procura o rótulo cujo token tem exatamente `len` caracteres iguais a `txt` (sem caixa). */
+static bool rotulo_por_texto(const char *txt, size_t len, rotulo_dataset_t *out)
+{
+    for (size_t i = 0; i < sizeof(ROTULOS_COMANDO) / sizeof(ROTULOS_COMANDO[0]); ++i) {
+        const char *token = nome_rotulo(ROTULOS_COMANDO[i]);
+        if (strlen(token) == len && strncasecmp(txt, token, len) == 0) {
+            *out = ROTULOS_COMANDO[i];
+            return true;
+        }
+    }
+    return false;
+}
+
+static void definir_rotulo(rotulo_dataset_t r, const char *origem)
+{
+    s_rotulo_dataset = r;
+    ESP_LOGI(TAG, "RF15: rótulo do dataset = %s (via %s)", nome_rotulo(r), origem);
+}
 
 /* ------------------------- auxiliares de log ---------------------------- */
 /* Nomes de estado do protocolo/log vivem no módulo puro mqtt_payloads
@@ -144,9 +202,28 @@ static void processar_linha(const char *linha)
                    s_baseline.media[METRICA_RMS][EIXO_Y], s_baseline.desvio_padrao[METRICA_RMS][EIXO_Y],
                    s_baseline.media[METRICA_RMS][EIXO_Z], s_baseline.desvio_padrao[METRICA_RMS][EIXO_Z]);
         }
+        const anomalia_modelo_t *modelo = anomalia_modelo_embarcado();
+        if (modelo != NULL) {
+            printf("detector (sombra): score=%.3f limiar=%.3f rotulo=%s\n",
+                   s_ultimo_score, modelo->limiar, nome_rotulo(s_rotulo_dataset));
+        } else {
+            printf("detector (sombra): sem modelo embarcado, rotulo=%s\n", nome_rotulo(s_rotulo_dataset));
+        }
+        const regime_modelo_t *modelo_regime = regime_modelo_embarcado();
+        if (modelo_regime != NULL) {
+            printf("regime: %d (distancia=%.3f) modelo %s\n", s_ultimo_regime, s_ultima_distancia_regime,
+                   modelo_regime->decide_estado ? "decide o estado" : "em modo sombra");
+        } else {
+            printf("regime: sem modelo embarcado\n");
+        }
         return;
     }
-    printf("comandos: calibrar | status\n");
+    rotulo_dataset_t rotulo;
+    if (rotulo_por_texto(linha, strlen(linha), &rotulo)) {
+        definir_rotulo(rotulo, "serial");
+        return;
+    }
+    printf("comandos: " AJUDA_COMANDOS "\n");
 }
 
 /* Conectividade: callbacks WiFi/MQTT rodam em tasks do stack (loop de eventos
@@ -193,6 +270,23 @@ static void publicar_alerta(const alerta_evento_t *ev)
     }
 }
 
+static void publicar_telemetria(const telemetria_evento_t *t)
+{
+    if (!mqtt_client_is_connected()) {
+        return;
+    }
+    char buf[PAYLOAD_TELEMETRIA_BUF_TAM];
+    const size_t n = mqtt_formatar_telemetria(buf, sizeof(buf), CONFIG_PULSOPNAAT_NODE_ID, t->ts_us,
+                                              t->maquina, t->equipamento, &t->metricas, t->score,
+                                              t->anomalia, nome_rotulo(t->rotulo), t->regime,
+                                              t->distancia_regime, t->estado_limiares);
+    if (n == 0) {
+        ESP_LOGW(TAG, "telemetria não formatada — descartada");
+        return;
+    }
+    (void)mqtt_client_publish(MQTT_TOPIC_TELEMETRIA, buf, 0, 0);
+}
+
 static void tratar_comando_rede(const comando_rede_t *cmd)
 {
     if (cmd->tipo == COMANDO_REDE_CALIBRAR) {
@@ -230,6 +324,10 @@ static void tarefa_conectividade(void *arg)
         while (xQueueReceive(s_fila_alertas, &ev, 0) == pdTRUE) {
             publicar_alerta(&ev);
         }
+        telemetria_evento_t tel;
+        if (xQueueReceive(s_fila_telemetria, &tel, 0) == pdTRUE) {
+            publicar_telemetria(&tel);
+        }
     }
 }
 
@@ -262,7 +360,7 @@ static void wifi_state_changed(wifi_state_t state)
         alerta_servico_publicar_evento(EVENTO_WIFI_CAIR);
     } else if (state == WIFI_STATE_FAILED) {
         s_wifi_tem_ip = false;
-        ESP_LOGE(TAG, "WiFi falhou (MAX_RETRY) — máquina em CONTINGÊNCIA até novo wifi_config_start()");
+        ESP_LOGE(TAG, "WiFi falhou (MAX_RETRY) — máquina em CONTINGÊNCIA; reconexão automática periódica (RNF05)");
         alerta_servico_publicar_evento(EVENTO_WIFI_CAIR);
     }
 }
@@ -298,7 +396,12 @@ static void mqtt_data_received(const char *topic, const char *data, int data_len
     } else if (data_len == 6 && strncasecmp(data, "status", 6) == 0) {
         mqtt_enfileirar_comando(COMANDO_REDE_STATUS);
     } else {
-        ESP_LOGW(TAG, "comando MQTT desconhecido — ignorado (calibrar | status)");
+        rotulo_dataset_t rotulo;
+        if (data_len > 0 && rotulo_por_texto(data, (size_t)data_len, &rotulo)) {
+            definir_rotulo(rotulo, "MQTT");
+        } else {
+            ESP_LOGW(TAG, "comando MQTT desconhecido — ignorado (" AJUDA_COMANDOS ")");
+        }
     }
 }
 
@@ -362,6 +465,23 @@ static void tarefa_processamento(void *arg)
     metricas_t metricas;
     estado_maquina_t estado_visto = ESTADO_MAQ_BOOT;
     bool avisou_sem_baseline = false;
+    bool anomalia_vista = false;
+    const anomalia_modelo_t *modelo = anomalia_modelo_embarcado();
+    if (modelo != NULL) {
+        ESP_LOGI(TAG, "detector de anomalia embarcado (modo sombra), limiar=%.3f", modelo->limiar);
+    } else {
+        ESP_LOGW(TAG, "sem modelo de anomalia embarcado — treine com tools/classificador/treinar_detector.py");
+    }
+    const regime_modelo_t *modelo_regime = regime_modelo_embarcado();
+    regime_filtro_t filtro_regime;
+    regime_filtro_iniciar(&filtro_regime);
+    int regime_visto = REGIME_DESCONHECIDO;
+    if (modelo_regime != NULL) {
+        ESP_LOGI(TAG, "modelo de regime embarcado (%d regimes), %s", modelo_regime->n_classes,
+                 modelo_regime->decide_estado ? "decide LED e alertas" : "em modo sombra");
+    } else {
+        ESP_LOGW(TAG, "sem modelo de regime embarcado — treine com tools/classificador/treinar_regime.py");
+    }
 
     printf("# rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,h1x_y,h2x_y,b3x5_y,kurt_y,thd_y,rms_z,h1x_z,h2x_z,b3x5_z,kurt_z,thd_z\n");
     printf("# unidades: rms/h1x/h2x/b3x5 em m/s²; kurt e thd adimensionais; f0 = %.3f Hz (RPM nominal %d)\n", f0_hz, CONFIG_PULSOPNAAT_RPM_NOMINAL);
@@ -390,11 +510,59 @@ static void tarefa_processamento(void *arg)
         /* RF12: registra a janela no cartão (task dedicada, não-bloqueante —
          * RNF09). BOOT ainda não tem métrica útil (sem baseline, aguardando
          * calibração) — não gera ruído no log antes disso. */
+        const float score = anomalia_score(modelo, &metricas);
+        const bool anomalia = anomalia_eh_anomalia(modelo, score);
+        s_ultimo_score = score;
+
+        /* Regime (parado/velocidade) e saúde dentro dele, pelo modelo treinado. O regime
+         * publicado é a moda das últimas janelas; a saúde usa a janela atual. */
+        regime_resultado_t regime_janela;
+        regime_classificar(modelo_regime, &metricas, &regime_janela);
+        const int regime = regime_filtro_atualizar(&filtro_regime, regime_janela.regime);
+        s_ultimo_regime = regime;
+        s_ultima_distancia_regime = regime_janela.distancia;
+        if (modelo_regime != NULL && regime != regime_visto) {
+            ESP_LOGI(TAG, "regime reconhecido: %d → %d", regime_visto, regime);
+            regime_visto = regime;
+        }
+        /* Opinião dos limiares média+kσ: só existe com baseline (fora de BOOT/CALIBRANDO). */
+        const bool classificando = (estado == ESTADO_MAQ_MONITORANDO || estado == ESTADO_MAQ_CONTINGENCIA);
+        const estado_equipamento_t estado_limiares = classificando
+                                                         ? alerta_classificar_janela(&s_baseline, &metricas)
+                                                         : (estado_equipamento_t)-1;
+
+        if (estado != ESTADO_MAQ_BOOT && s_fila_telemetria != NULL) {
+            const telemetria_evento_t tel = {
+                .ts_us = esp_timer_get_time(),
+                .maquina = estado,
+                .equipamento = alerta_servico_estado_equipamento(),
+                .metricas = metricas,
+                .score = score,
+                .anomalia = anomalia,
+                .rotulo = s_rotulo_dataset,
+                .regime = regime,
+                .distancia_regime = regime_janela.distancia,
+                .estado_limiares = estado_limiares,
+            };
+            (void)xQueueOverwrite(s_fila_telemetria, &tel);
+        }
+        if (anomalia != anomalia_vista && estado != ESTADO_MAQ_BOOT) {
+            ESP_LOGI(TAG, "detector (sombra): %s (score=%.2f limiar=%.2f)",
+                     anomalia ? "ANOMALIA" : "normal", score, modelo->limiar);
+            anomalia_vista = anomalia;
+        }
+
         if (estado != ESTADO_MAQ_BOOT) {
             const storage_registro_t reg_sd = {
                 .estado_maquina = estado,
                 .estado_equipamento = alerta_servico_estado_equipamento(),
                 .metricas = metricas,
+                .rotulo = s_rotulo_dataset,
+                .score_anomalia = score,
+                .anomalia = anomalia,
+                .regime = regime,
+                .distancia_regime = regime_janela.distancia,
+                .estado_limiares = estado_limiares,
             };
             storage_log_janela(&reg_sd);
         }
@@ -428,7 +596,10 @@ static void tarefa_processamento(void *arg)
         }
         case ESTADO_MAQ_MONITORANDO:
         case ESTADO_MAQ_CONTINGENCIA: {
-            const estado_equipamento_t novo = alerta_classificar_janela(&s_baseline, &metricas);
+            /* §5.4: o modelo de regime só assume LED/buzzer/alertas se o treino aprovou o
+             * portão de decisão; senão valem os limiares. A confirmação k=3 vale para ambos. */
+            const bool modelo_decide = modelo_regime != NULL && modelo_regime->decide_estado;
+            const estado_equipamento_t novo = modelo_decide ? regime_janela.estado : estado_limiares;
             const estado_equipamento_t anterior = alerta_servico_estado_equipamento();
             const estado_equipamento_t efetivo = alerta_servico_definir_estado_equipamento(novo);
 
@@ -492,6 +663,11 @@ void app_main(void)
     s_fila_comandos = xQueueCreate(FILA_COMANDOS_PROFUNDIDADE, sizeof(comando_rede_t));
     if (s_fila_comandos == NULL) {
         ESP_LOGE(TAG, "falha ao criar fila de comandos");
+        return;
+    }
+    s_fila_telemetria = xQueueCreate(1, sizeof(telemetria_evento_t));
+    if (s_fila_telemetria == NULL) {
+        ESP_LOGE(TAG, "falha ao criar fila de telemetria");
         return;
     }
 

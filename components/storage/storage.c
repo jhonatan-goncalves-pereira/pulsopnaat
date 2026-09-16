@@ -30,7 +30,7 @@ static const char *TAG = "storage";
 /* RNF09: escrita em task dedicada, baixa prioridade (abaixo da amostragem e
  * do processamento, acima do idle) — nunca compete pelo core do DSP. */
 #define TAREFA_STORAGE_PRIORIDADE 3
-#define TAREFA_STORAGE_STACK 4096
+#define TAREFA_STORAGE_STACK 6144
 #define TAREFA_STORAGE_CORE 0
 
 /* Descartes só são logados a cada N ocorrências — evita floodar o console
@@ -44,7 +44,8 @@ static const char CSV_CABECALHO[] =
     "timestamp,node_id,estado_maquina,estado_equipamento,"
     "rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,"
     "rms_y,h1x_y,h2x_y,b3x5_y,kurt_y,thd_y,"
-    "rms_z,h1x_z,h2x_z,b3x5_z,kurt_z,thd_z\n";
+    "rms_z,h1x_z,h2x_z,b3x5_z,kurt_z,thd_z,"
+    "rotulo,score_anomalia,anomalia,regime,distancia_regime,estado_limiares\n";
 
 static QueueHandle_t s_fila;
 static TaskHandle_t s_task;
@@ -80,6 +81,19 @@ static const char *nome_estado_equipamento_csv(estado_equipamento_t e)
     case ESTADO_EQUIP_AMARELO:  return "AMARELO";
     case ESTADO_EQUIP_VERMELHO: return "VERMELHO";
     default:                    return "?";
+    }
+}
+
+const char *storage_nome_rotulo(rotulo_dataset_t r)
+{
+    switch (r) {
+    case ROTULO_SAUDAVEL: return "saudavel";
+    case ROTULO_FALHA:    return "falha";
+    case ROTULO_PARADO:   return "parado";
+    case ROTULO_VEL1:     return "vel1";
+    case ROTULO_VEL2:     return "vel2";
+    case ROTULO_VEL3:     return "vel3";
+    default:              return "sem_rotulo";
     }
 }
 
@@ -349,7 +363,8 @@ static void tarefa_storage(void *arg)
                 "%s,%s,%s,%s,"
                 "%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
                 "%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
-                "%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                "%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,"
+                "%s,%.4f,%d,%d,%.4f,%s\n",
                 ts_buf, CONFIG_PULSOPNAAT_NODE_ID,
                 nome_estado_maquina_csv(reg.estado_maquina),
                 nome_estado_equipamento_csv(reg.estado_equipamento),
@@ -358,7 +373,10 @@ static void tarefa_storage(void *arg)
                 m->rms[EIXO_Y], m->harmonica_1x[EIXO_Y], m->harmonica_2x[EIXO_Y],
                 m->banda_3x_5x[EIXO_Y], m->kurtosis[EIXO_Y], m->thd[EIXO_Y],
                 m->rms[EIXO_Z], m->harmonica_1x[EIXO_Z], m->harmonica_2x[EIXO_Z],
-                m->banda_3x_5x[EIXO_Z], m->kurtosis[EIXO_Z], m->thd[EIXO_Z]);
+                m->banda_3x_5x[EIXO_Z], m->kurtosis[EIXO_Z], m->thd[EIXO_Z],
+                storage_nome_rotulo(reg.rotulo), reg.score_anomalia, reg.anomalia ? 1 : 0,
+                reg.regime, reg.distancia_regime,
+                nome_estado_equipamento_csv(reg.estado_limiares));
         /* fflush sozinho não basta no FAT: o tamanho do arquivo na entrada de
          * diretório só é gravado em f_sync/f_close. Sem fsync, reset ou queda de
          * energia deixa o CSV com 0 bytes (visto em campo). Com ele, perde-se no
