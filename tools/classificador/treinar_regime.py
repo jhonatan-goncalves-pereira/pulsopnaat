@@ -95,7 +95,7 @@ def aplicar_eventos_limiares(janelas, caminho):
         while i < len(trocas) and trocas[i][0] <= j["t"]:
             estado = trocas[i][2]
             i += 1
-        if j["limiares_confirmado"] is None:
+        if j["limiares_confirmado"] is None and j["limiares_bruto"] is None:
             j["limiares_confirmado"] = estado
 
 
@@ -349,11 +349,14 @@ def main():
         confirmado = por_segmento(avaliadas, lambda _, bloco: confirmar([bruto[i] for i in bloco]))
         verdade_falha = [j["classe"] == "falha" for j in avaliadas]
         mc_modelo = saude_matriz(verdade_falha, [e != VERDE for e in confirmado])
-        if all(j["limiares_bruto"] is not None for j in avaliadas):
-            lim = por_segmento(avaliadas, lambda js, _: confirmar([j["limiares_bruto"] for j in js]))
+        # Opinião dos limiares por trecho: bruta confirmada aqui (firmware novo) ou já confirmada no nó.
+        def limiares_trecho(js, _):
+            if all(j["limiares_bruto"] is not None for j in js):
+                return confirmar([j["limiares_bruto"] for j in js])
+            return [j["limiares_confirmado"] for j in js]
+        lim = por_segmento(avaliadas, limiares_trecho)
+        if all(e is not None for e in lim):
             mc_limiares = saude_matriz(verdade_falha, [e != VERDE for e in lim])
-        elif all(j["limiares_confirmado"] is not None for j in avaliadas):
-            mc_limiares = saude_matriz(verdade_falha, [j["limiares_confirmado"] != VERDE for j in avaliadas])
 
     if mc_modelo is None:
         portao, decide = "INCONCLUSIVO — faltam janelas de teste saudáveis ou de falha; modelo fica em modo sombra", False

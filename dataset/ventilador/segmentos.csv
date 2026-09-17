@@ -14,3 +14,14 @@ inicio,fim,classe,grupo,observacao
 2026-09-16T20:23:31Z,2026-09-16T20:30:56Z,falha,treino,filtro de linha com mau contato na velocidade 3
 2026-09-16T20:30:56Z,2026-09-16T20:37:55Z,parado,treino,visita 3 parado
 2026-09-16T20:38:35Z,2026-09-16T20:43:16Z,vel2,teste,visita 3 da velocidade 2 (tomada trocada antes; vibração assentando ao longo do trecho)
+2026-09-16T22:08:40Z,2026-09-16T22:10:26Z,parado,treino,posição 2 (ventilador mudado de lugar): visita 1 parado
+2026-09-16T22:10:26Z,2026-09-16T22:11:37Z,vel1,treino,posição 2: visita 1 da velocidade 1
+2026-09-16T22:11:37Z,2026-09-16T22:13:24Z,vel2,treino,posição 2: visita 1 da velocidade 2
+2026-09-16T22:13:24Z,2026-09-16T22:14:52Z,vel3,treino,posição 2: visita 1 da velocidade 3
+2026-09-16T22:14:52Z,2026-09-16T22:16:09Z,parado,teste,posição 2: visita 2 parado
+2026-09-16T22:16:09Z,2026-09-16T22:17:52Z,vel1,teste,posição 2: visita 2 da velocidade 1
+2026-09-16T22:17:52Z,2026-09-16T22:19:18Z,vel2,teste,posição 2: visita 2 da velocidade 2
+2026-09-16T22:19:18Z,2026-09-16T22:20:43Z,vel3,teste,posição 2: visita 2 da velocidade 3
+2026-09-16T22:20:44Z,2026-09-16T22:24:51Z,falha,treino,"posição 2: filtro de linha com mau contato, visita 1"
+2026-09-16T22:24:52Z,2026-09-16T22:26:50Z,parado,treino,posição 2: visita 3 parado
+2026-09-16T22:26:51Z,2026-09-16T22:27:55Z,falha,teste,"posição 2: filtro de linha com mau contato, visita 2"
