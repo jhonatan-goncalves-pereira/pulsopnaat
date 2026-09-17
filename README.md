@@ -1,686 +1,770 @@
-
 <p align="center">
   <img src="docs/img/pulsopnaat_cabecalho.png" alt="FIT · PulsoPNAAT — Sistema Embarcado de Manutenção Preditiva por Análise de Vibração" width="100%">
-
 </p>
 
-# PulsoPNAAT: Manutenção Preditiva por Análise de Vibração
- 
-TCC: Trabalho de Conclusão da Capacitação PNAAT 2026 (FIT · MCTI Futuro · Softex)
- 
-Um nó de borda (ESP32-S3 + BNO085) fixado à carcaça de um equipamento rotativo monitora
-a vibração triaxial em tempo real, calcula métricas de severidade na borda (Edge AI) e
-emite alertas antes da falha, via MQTT e sinalização local (LED + buzzer).
- 
+# PulsoPNAAT: manutenção preditiva por análise de vibração
+
+TCC da capacitação PNAAT 2026 (FIT · MCTI Futuro · Softex) · Grupo TCC 14
+
 Equipe: Jetro Kepler Gomes Alencar Gonzaga Viana · Jhonatan Gonçalves Pereira ·
 José Adiel Calixto Serafim · Lucas Vinicius Santos Leonel
- 
+
+Repositório: <https://github.com/jhonatan-goncalves-pereira/pulsopnaat>
+
 ---
- 
+
 ## Sumário
- 
-1. [Por que este projeto existe](#1-por-que-este-projeto-existe) - dor, resultado, limites
-2. [Arquitetura](#2-arquitetura) - diagrama de blocos, fluxo de dados, tasks, estados
-3. [Hardware e montagem](#3-hardware-e-montagem) - peças, pinagem I2C, LED/buzzer, RTC, microSD, fixação
-4. [Software e estrutura do repositório](#4-software-e-estrutura-do-repositório) - pastas e arquivos
-5. [Dependências](#5-dependências) - bibliotecas, plataformas, ferramentas
-6. [Pré-requisitos](#6-pré-requisitos) - o que instalar antes de começar
-7. [Configuração](#7-configuração) - Wi-Fi, MQTT, equipamento, pinos (`menuconfig`)
-   - 7.1 [Rede e broker MQTT da bancada](#71-rede-e-broker-mqtt-da-bancada-para-reproduzirgravar-o-vídeo)
-8. [Como compilar, gravar e monitorar](#8-como-compilar-gravar-e-monitorar) - passo a passo reprodutível
-   - 8.1 [Partição "factory" pequena demais](#81-partição-factory-pequena-demais-app-partition-is-too-small)
-9. [Como operar](#9-como-operar) - calibrar, classificar, LED/buzzer, MQTT, demo
-   - 9.5 [Data logging (microSD + RTC)](#95-data-logging-microsd--rtc--para-que-serve)
-   - 9.6 [Observabilidade: MQTT → Grafana](#96-observabilidade-mqtt--grafana)
-   - 9.7 [Detector de anomalia (Edge AI em modo sombra)](#97-detector-de-anomalia-edge-ai-em-modo-sombra-54)
-10. [Como testar](#10-como-testar) - suíte Unity on-target
-11. [Critérios de sucesso (KPIs)](#11-critérios-de-sucesso-kpis)
-12. [Solução de problemas](#12-solução-de-problemas)
-13. [Convenções de contribuição](#13-convenções-de-contribuição)
-14. [Links e artefatos do projeto](#14-links-e-artefatos-do-projeto)
+
+1. [Visão geral](#1-visão-geral)
+2. [Arquitetura](#2-arquitetura)
+3. [Estrutura do repositório](#3-estrutura-do-repositório)
+4. [Pré-requisitos](#4-pré-requisitos)
+5. [Dependências e instalação](#5-dependências-e-instalação)
+6. [Configuração](#6-configuração)
+7. [Montagem elétrica](#7-montagem-elétrica)
+8. [Como executar](#8-como-executar)
+9. [Resultado esperado](#9-resultado-esperado)
+10. [Modelo treinado e dataset](#10-modelo-treinado-e-dataset)
+11. [Testes](#11-testes)
+12. [Critérios de sucesso e resultados medidos](#12-critérios-de-sucesso-e-resultados-medidos)
+13. [Limitações e pendências](#13-limitações-e-pendências)
+14. [Solução de problemas](#14-solução-de-problemas)
+15. [Convenções de contribuição](#15-convenções-de-contribuição)
+16. [Links do projeto](#16-links-do-projeto)
+
 ---
- 
-## 1. Por que este projeto existe?
- 
-A dor (Cenário 8, manufatura pesada): motores elétricos e rolamentos sofrem desgaste
-progressivo que altera o padrão de vibração *semanas antes* da falha catastrófica, um
-sinal imperceptível à supervisão humana. Sem acompanhamento preditivo, a manutenção opera
-no modo reativo: a primeira indicação do problema é a própria parada não programada
-(custo emergencial + perda de produção).
- 
-O que o sistema faz: cada janela de 1 s de vibração vira 6 métricas por eixo
-(RMS, 1x, 2x, banda 3x-5x, kurtosis, THD), comparadas a um baseline calibrado do próprio
-equipamento. O estado (normal / atenção / crítico) sai por votação entre métricas, com o
-pior eixo dando o estado do equipamento. Saída puramente informativa: o nó observa
-e informa, nunca atua sobre o motor.
- 
-O que o sistema explicitamente NÃO faz (limites declarados do projeto):
- 
-- Não interrompe o motor nem aciona atuadores (exigiria contatores, isolamento galvânico,
-  segurança industrial, fora do escopo).
-- Não diagnostica causa raiz com precisão plena (indica *tendências*: pico em 1x sugere
-  desbalanceamento, 2x desalinhamento etc., não substitui laudo técnico).
-- Não detecta falhas de rolamento em alta frequência (BPFO/BPFI, 1-10 kHz): a 400 Hz de
-  amostragem, o Nyquist de 200 Hz não alcança essa faixa.
-- Não arquiva em nuvem nem faz análise histórica avançada.
-- Não usa o rádio LoRa da placa; a rede é Wi-Fi + MQTT, com modo de contingência local
-  quando o Wi-Fi cai.
+
+## 1. Visão geral
+
+Motores e rolamentos mudam o padrão de vibração semanas antes de quebrar, mas essa mudança não é
+percebida a olho nu. Sem monitoramento, a manutenção só age depois da parada, com custo de
+emergência e produção perdida (Cenário 8 do PNAAT: manufatura pesada, como as plantas de
+transformação plástica do Cariri).
+
+O PulsoPNAAT é um nó de borda (ESP32-S3 Heltec WiFi LoRa 32 V3 com acelerômetro GY-BNO085) preso na
+carcaça do equipamento. Ele mede a vibração nos três eixos a 400 Hz e, a cada segundo, calcula 18
+métricas (RMS, harmônicas 1x e 2x, banda 3x–5x, kurtosis e THD por eixo). Um modelo treinado com
+dados reais do próprio equipamento reconhece em que condição ele está (parado, velocidade 1, 2 ou 3,
+ou com falha de alimentação) e se a vibração é a esperada para essa condição. O resultado aparece no
+LED RGB e no buzzer, vai por MQTT para um dashboard no Grafana e fica gravado em CSV no microSD, com
+a hora do RTC DS3231.
+
+Na bancada, o equipamento monitorado é um ventilador de 3 velocidades, e a falha é provocada
+ligando-o num filtro de linha com mau contato.
+
+**O que o sistema não faz (limites do escopo):**
+
+- Não desliga o motor nem aciona atuadores: só observa e avisa.
+- Não substitui laudo técnico. As métricas indicam tendências (1x sugere desbalanceamento, 2x
+  desalinhamento etc.), não a causa exata.
+- Não detecta falhas de rolamento de alta frequência (BPFO/BPFI, 1–10 kHz): amostrando a 400 Hz, a
+  análise vai até 200 Hz (Nyquist).
+- Não guarda histórico em nuvem: os dados ficam no cartão e no InfluxDB local.
+- Não usa o rádio LoRa da placa: a rede é Wi-Fi + MQTT.
+
+### Protótipo
+
+<img width="2511" height="848" alt="Protótipo do PulsoPNAAT montado" src="https://github.com/user-attachments/assets/35c24b3f-0e94-446e-9fbb-f9278d8c7c9c" />
+
 ---
- 
+
 ## 2. Arquitetura
- 
-### 2.1 Diagrama de blocos (fluxo de dados)
- 
+
+### 2.1 Fluxo Entrada → Processamento → Saída
+
+**Entrada**
+
+- Vibração: o GY-BNO085, preso na carcaça, entrega aceleração linear em m/s² (já sem a gravidade)
+  a 400 Hz pelo I2C (GPIO 6/7), com aviso de dado pronto no GPIO 5.
+- Comandos: botão BOOT da placa (GPIO 0), console serial ou mensagem no tópico
+  `pulsopnaat/command`. Comandos aceitos: `calibrar`, `status` e os rótulos `parado`, `vel1`,
+  `vel2`, `vel3`, `saudavel`, `falha` e `sem_rotulo`.
+- Hora: com Wi-Fi, o nó sincroniza com `pool.ntp.org` e acerta o RTC DS3231, que guarda a hora sem
+  rede.
+
+**Processamento** (ESP32-S3 com FreeRTOS)
+
+1. Amostragem (núcleo 0): janelas de 1 s com 400 amostras por eixo. Leituras impossíveis (acima de
+   20 g) são descartadas, e o sensor é reiniciado sozinho se ficar 2 s sem mandar amostra.
+2. Métricas (núcleo 1): filtro de Hampel e FFT de 512 pontos com janela de Hann, cerca de 11 ms
+   por janela.
+3. Condição e saúde: o modelo compara as 18 métricas com a assinatura de cada condição aprendida no
+   treino (distância de Mahalanobis) e escolhe a mais próxima. Se a condição reconhecida for a falha
+   de alimentação, o estado é crítico. Nas outras, a distância até a assinatura decide: normal,
+   atenção ou crítico. A condição exibida só troca quando 7 das últimas 9 janelas concordam, e o
+   estado só muda depois de 3 janelas seguidas iguais.
+4. Máquina de estados: `BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA`. Os limiares estatísticos
+   da calibração (média + 3σ e média + 6σ, com votação entre métricas) continuam sendo calculados e
+   publicados, só para comparação com o modelo.
+
+**Saída**
+
+- Local: LED RGB (GPIO 39/40/41) e buzzer (GPIO 42).
+- Remota: por MQTT, `pulsopnaat/telemetria` recebe uma mensagem por segundo (métricas, condição
+  reconhecida, estado e a opinião dos limiares), `pulsopnaat/alert` recebe cada alerta confirmado e
+  `pulsopnaat/status` recebe o status do nó. O Telegraf grava no InfluxDB, e o Grafana mostra o
+  dashboard, localmente ou por um link público.
+- Registro: CSV no microSD (`/sdcard/pulso/log_AAAAMMDD_HHMMSS.csv`), uma linha por segundo com hora
+  UTC e um arquivo novo a cada 15 min. A gravação roda numa tarefa separada e não atrasa a amostragem.
+
+### 2.2 Diagrama de arquitetura
+
 ```mermaid
 flowchart LR
-    subgraph SENSOREAMENTO
-        M[motor / equipamento<br/>fonte de vibração]
-        S[BNO085<br/>aceleração linear 3 eixos<br/>400 Hz, sem gravidade]
-        M -->|vibração mecânica<br/>fixação rígida| S
+    subgraph NO["Nó de borda · ESP32-S3 com FreeRTOS"]
+        S["BNO085<br/>400 Hz · 3 eixos"] -->|I2C| A["Amostragem · núcleo 0<br/>janela de 1 s"]
+        A -->|fila de janelas| P["Processamento · núcleo 1<br/>Hampel + FFT-512<br/>18 métricas"]
+        P --> M["Modelo treinado<br/>condição + saúde"]
+        P --> L["Limiares da calibração<br/>só comparação"]
+        M --> E["Estado confirmado<br/>3 janelas"]
+        E --> SIN["LED RGB + buzzer"]
+        P -->|fila| SD["Storage · núcleo 0<br/>CSV no microSD + RTC"]
+        P -->|fila| C["Conectividade · núcleo 1<br/>Wi-Fi + MQTT"]
     end
-    subgraph PROCESSAMENTO_BORDA[ESP32-S3 — processamento na borda]
-        AQ[aquisição + janelamento<br/>1 s = 400 amostras/eixo<br/>core 0, prio alta]
-        DSP[cálculo por janela e por eixo<br/>RMS + FFT/Hann-512 + kurtosis + THD<br/>core 1, ~11 ms]
-        BL[baseline calibrado<br/>30 janelas, Welford<br/>NVS — média+σ por métrica/eixo]
-        CL[classificação 3σ/6σ<br/>votação + pior eixo<br/>confirmação k=3 janelas]
-        SM[máquina de estados<br/>BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA]
-        S -->|I2C 400 kHz| AQ -->|fila janela| DSP
-        DSP --> BL
-        BL --> CL --> SM
+    C -->|"telemetria · alert · status"| B[("Broker MQTT<br/>broker.mqttdashboard.com")]
+    B -->|command| C
+    subgraph PC["PC · Docker"]
+        T["Telegraf"] --> I[("InfluxDB 2.7")] --> G["Grafana"]
     end
-    subgraph SAIDAS[Saídas informativas]
-        LED[LED RGB externo<br/>verde/amarelo/vermelho<br/>azul calibrando, branco sem rede]
-        BZ[buzzer<br/>só em crítico]
-        MQ{MQTT / Wi-Fi<br/>broker Mosquitto local}
-        SM --> LED
-        SM --> BZ
-        SM -->|fila alertas<br/>task separada, sem bloquear amostragem| MQ
-    end
+    B --> T
+    G -.->|"link público opcional<br/>cloudflared"| U["Navegador ou celular"]
 ```
- 
-Leitura do fluxo: vibração → BNO085 (I2C) → amostragem (core 0) → fila →
-processamento (core 1) → comparação com baseline → classificação → dois destinos
-independentes: sinalização local imediata (LED/buzzer) e publicação remota (MQTT).
-Queda de Wi-Fi não trava a amostragem: o nó entra em `CONTINGÊNCIA`, sinaliza "sem
-conectividade" e tenta reconectar sozinho.
- 
- ## Protótipo
-<img width="2511" height="848" alt="Image" src="https://github.com/user-attachments/assets/35c24b3f-0e94-446e-9fbb-f9278d8c7c9c" />
- 
-### 2.2 Elementos e relações
- 
-| Bloco | Elemento | Papel | Relação / fluxo |
-|---|---|---|---|
-| Sensoriamento | BNO085 (módulo GY-BNO085 do kit) | Aceleração linear triaxial (X, Y, Z) em m/s², já sem gravidade (fusão no sensor) | I2C 400 kHz → ESP32-S3; fixado rigidamente à carcaça |
-| Processamento | ESP32-S3 (Heltec WiFi LoRa 32 V3), FreeRTOS | Amostragem (core 0) + cálculo + classificação (core 1) | Janelas via Queue; alertas via Queue dedicada |
-| Baseline | 30 janelas saudáveis, Welford, NVS | "Assinatura saudável" por métrica e eixo | Calibração comandada (botão/serial/MQTT); sem baseline não há classificação |
-| Decisão | Limiares mean+3σ / mean+6σ, votação, pior eixo, confirmação k=3 | Estado normal/atenção/crítico | Blips de 1 janela não viram alarme; falha real persiste e confirma |
-| Conectividade | Wi-Fi + MQTT (broker Mosquitto local) | Alerta remoto acionável | Task de baixa prioridade; nunca bloqueia a amostragem |
-| Sinalização | LED RGB externo + buzzer ativo | Estado visível/audível no chão de fábrica | Buzzer só em crítico; falha de LED/buzzer não derruba o monitoramento |
-| Robustez | Watchdog, filtro Hampel + rejeição de spikes | Operação contínua | Spikes fisicamente impossíveis são descartados antes da estatística |
- 
-> No código, a conectividade está desdobrada em dois componentes:
-> `components/wifi_config/` (station + retries até `WIFI_MAX_RETRY`, default 5) e
-> `components/mqtt_client/` (transporte + `mqtt_payloads.c` puro).
- 
-### 2.3 Máquina de estados
- 
-```
-BOOT → CALIBRANDO → MONITORANDO ⇄ CONTINGÊNCIA
-```
- 
-- BOOT: inicializa hardware; sem baseline válido, descarta janelas (LED apagado).
-  Reboot com baseline salvo em NVS entra direto em `MONITORANDO`.
-- CALIBRANDO: 30 janelas (~30 s) com o equipamento em regime saudável; LED azul
-  piscando ("não perturbe o equipamento"). Não classifica.
-- MONITORANDO: classifica cada janela, atualiza LED/buzzer, publica alertas.
-- CONTINGÊNCIA: Wi-Fi indisponível; LED branco piscando; reconexão automática;
-  buzzer continua reservado ao estado crítico.
----
- 
-## 3. Hardware e montagem
- 
-### 3.1 Peças
- 
-| Item | Modelo | Observação |
-|---|---|---|
-| Placa de processamento | Heltec WiFi LoRa 32 V3 (ESP32-S3) | Placa padrão do kit PNAAT; rádio LoRa presente mas não usado pelo firmware |
-| Sensor | Módulo GY-BNO085 (acelerômetro triaxial) | Único dispositivo com acelerometria do kit; lido em modo I2C |
-| Relógio de tempo real | RTC DS3231 | Timestamp absoluto para o datalog; mesmo barramento I2C do BNO085 (ver §3.5) |
-| Armazenamento | Módulo microSD (leitor SPI) | Datalog em CSV com rotação por tempo (ver §3.5 e §9.5) |
-| Sinalização | LED RGB externo (3 canais discretos) + resistores ~220-330 Ω por canal | A Heltec V3 não tem LED RGB endereçável utilizável, usar LED externo |
-| Alerta sonoro | Buzzer ativo (liga/desliga por nível digital, sem PWM) | Soa apenas em estado crítico |
-| Fixação | Suporte/cola rígida + parafusos | Acoplamento rígido à carcaça é pré-condição de leitura confiável |
- 
-### 3.2 Ligação I2C: ESP32-S3 (Heltec V3) × GY-BNO085
- 
-| BNO085 | ESP32-S3 | Sinal / nota |
-|---|---|---|
-| VCC | 3V3 | Alimentação 3,3 V |
-| GND | GND | Referência comum |
-| SDA | GPIO 6 | I2C data (`APP_BNO085_I2C_SDA_GPIO`, default 6) |
-| SCL | GPIO 7 | I2C clock (`APP_BNO085_I2C_SCL_GPIO`, default 7) |
-| INT (H_INTN) | GPIO 5 | Data-ready, ativo baixo |
-| RST (NRST) | GPIO 4 | Reset, ativo baixo |
-| AD0/SA0 | GND | Seleciona o endereço 0x4A (ver §3.3) |
-| PS0 + PS1 | GND | Obrigatório: modo I2C; flutuando o sensor não responde |
-| VCC do AD0/PSx | - | Não ligar em VCC salvo para mudar o endereço (ver abaixo) |
- 
-Frequência do barramento: 400 kHz (`APP_BNO085_I2C_FREQ_HZ`). Mantenha os fios I2C
-curtos e afastados dos cabos do motor (ruído eletromagnético próximo ao motor).
- 
-### 3.3 Endereço I2C: use 0x4A (0x28 NÃO funciona neste setup)
- 
-- Default do firmware: `0x4A` (`APP_BNO085_I2C_ADDR` em `main/Kconfig.projbuild`).
-- 0x28/0x29 são endereços do BNO055, não do BNO085. Com o módulo GY-BNO085 do kit
-  ligado à Heltec LoRa V3, `0x28` recebe NACK (o sensor não responde).
-- Regra do BNO085 (datasheet): SA0/AD0 em GND → 0x4A; em VCC → 0x4B.
-- Se o scanner I2C não achar nada em 0x4A: confira PS0/PS1 em GND, alimentação 3V3 e
-  SDA/SCL (6/7) antes de suspeitar de defeito.
-### 3.4 Sinalização local e botão
- 
-| Função | GPIO (default) | Nota |
-|---|---|---|
-| LED canal R | GPIO 39 | Vermelho = crítico; R+G = amarelo; R+G+B = branco (sem rede) |
-| LED canal G | GPIO 40 | Verde fixo = normal |
-| LED canal B | GPIO 41 | Azul piscando = calibrando |
-| Buzzer ativo | GPIO 42 | Nível liga/desliga; polaridade em `menuconfig` |
-| Botão calibração | GPIO 0 | Botão BOOT onboard, ativo baixo, pull-up interno |
- 
-Polaridade (catodo comum = nível alto acende, default; anodo comum = desmarcar
-`PULSOPNAAT_LED_ATIVO_ALTO`), canais desativáveis com GPIO negativo (LED de cor única)
-e GPIOs, tudo em `idf.py menuconfig` → componente `alert_manager`. Na Heltec V3 evite
-GPIOs 8-14 (rádio LoRa) e 17/18/21 (OLED).
- 
-### 3.5 RTC DS3231 e módulo microSD (armazenamento local)
-
-**RTC DS3231 — mesmo barramento I2C do BNO085:**
-
-| DS3231 | ESP32-S3 | Sinal / nota |
-|---|---|---|
-| VCC | 3V3 | Alimentação 3,3 V |
-| GND | GND | Referência comum |
-| SDA | GPIO 6 | Mesmo pino/barramento do BNO085 |
-| SCL | GPIO 7 | Mesmo pino/barramento do BNO085 |
-| Endereço I2C | — | `0x68` (fixo de fábrica) |
-
-**Módulo microSD — SPI dedicado:**
-
-| microSD | ESP32-S3 | Sinal / nota |
-|---|---|---|
-| VCC | 5V | Módulo tem regulador (AMS1117): em 3V3 o cartão recebe ~2,2 V e a inicialização falha no ACMD41 (`0x107`) |
-| GND | GND | Referência comum |
-| SCK | GPIO 33 | |
-| MOSI | GPIO 34 | |
-| MISO | GPIO 47 | Costuma vir serigrafado "MOSO" no módulo |
-| CS | GPIO 48 | |
-
-Cartão precisa estar formatado em FAT32 (não exFAT).
-
- ## Resumo Visual pinout
-
-<img width="1489" height="982" alt="Image" src="https://github.com/user-attachments/assets/76a13cb4-d9c0-4fd0-b549-54f89a7d1ead" />
----
- 
-## 4. Software e estrutura do repositório
- 
-Cada linha abaixo corresponde a um caminho real neste repositório (critério de
-rastreabilidade da banca: o que o README cita, o explorador de arquivos encontra).
- 
-```
-.
-├── main/                          firmware: wiring do sistema
-│   ├── main.c                     app_main — filas, tasks com pinning, pipeline completo
-│   ├── Kconfig.projbuild          menu "PulsoPNAAT": I2C/GPIO, aquisição, RPM, node ID
-│   ├── idf_component.yml          dependência rinku404/bno085 v1.2.0
-│   └── CMakeLists.txt             liga main aos componentes
-├── components/
-│   ├── i2c_config/                barramento I2C master + dispositivo BNO085
-│   │   ├── i2c_config.c  include/i2c_config.h  CMakeLists.txt
-│   ├── vibration_sensor/          aquisição LINEAR_ACCELERATION (0x04) @400 Hz, janelas 1 s
-│   │   ├── vibration_sensor.c  include/vibration_sensor.h  CMakeLists.txt
-│   ├── signal_processing/         matemática pura: RMS, Hann, FFT-512 (esp-dsp), kurtosis, THD
-│   │   ├── signal_processing.c  include/signal_processing.h
-│   │   ├── idf_component.yml      espressif/esp-dsp ^1.6.0 (consumidor direto da FFT)
-│   │   └── test/test_signal_processing.c
-│   ├── baseline/                  calibração comandada (30 janelas, Welford) + NVS
-│   │   ├── baseline.c  baseline_nvs.c  include/baseline.h  include/baseline_nvs.h
-│   │   └── test/test_baseline.c
-│   ├── alert_manager/             classificação 3σ/6σ, votação/pior eixo, máquina de estados, LED/buzzer
-│   │   ├── alert_manager.c (núcleo puro)  alerta_servico.c (face on-device)
-│   │   ├── include/alert_manager.h  include/alerta_servico.h  Kconfig  CMakeLists.txt
-│   │   └── test/test_alert_manager.c
-│   ├── wifi_config/               Wi-Fi station + reconexão (Kconfig: SSID/senha)
-│   │   ├── wifi_config.c  include/wifi_config.h  Kconfig  CMakeLists.txt
-│   ├── mqtt_client/                cliente MQTT + formatação de payloads (núcleo puro)
-│   │   ├── pnaat_mqtt_client.c  mqtt_payloads.c
-│   │   ├── include/pnaat_mqtt_client.h  include/mqtt_payloads.h
-│   │   ├── Kconfig (broker URI)  CMakeLists.txt
-│   │   └── test/test_mqtt_client.c
-│   └── storage/                    data logging em microSD + RTC DS3231 (RF12/RNF09)
-│       ├── storage.c  rtc_ds3231.c
-│       ├── include/storage.h  include/rtc_ds3231.h  Kconfig  CMakeLists.txt
-├── test_app/                      app de teste on-target (Unity no ESP32-S3)
-│   ├── main/test_app_main.c       runner: registra rodar_testes_<comp>() de cada suíte
-│   ├── CMakeLists.txt             inclui só os componentes com corpus de teste
-│   └── sdkconfig.defaults
-├── docs/img/fit_logo.png          logo institucional (usado no topo deste README)
-├── dependencies.lock              versões resolvidas (esp-dsp 1.8.2, bno085 1.2.0, IDF 5.5.5)
-└── README.md                      este manual (você está aqui)
-```
- 
-Lógica de organização: matemática/estado (`signal_processing`, `baseline`,
-`alert_manager`, `mqtt_payloads`) é pura (sem ESP-IDF, sem I/O, sem estado global)
-para ser testável isolada do hardware. Integração de
-hardware (I2C, Wi-Fi/MQTT, GPIO, SD/RTC) vive nas bordas (`i2c_config`,
-`vibration_sensor`, `wifi_config`, `pnaat_mqtt_client`, `alerta_servico`, `storage`,
-`app_main`) e é validada on-device.
- 
----
- 
-## 5. Dependências
- 
-| Categoria | Dependência | Versão | Origem / registro | Para quê |
-|---|---|---|---|---|
-| Plataforma | ESP-IDF | ≥ 5.5 (resolvido: 5.5.5) | instalador Espressif; `dependencies.lock` | Toolchain, FreeRTOS, Wi-Fi/MQTT, NVS, Unity |
-| Alvo | ESP32-S3 | - | `idf.py set-target esp32s3` | MCU da Heltec V3 |
-| Driver sensor | `rinku404/bno085` | 1.2.0 | `main/idf_component.yml` (registry Espressif) | HAL SH-2 I2C do BNO085 |
-| DSP | `espressif/esp-dsp` | ^1.6.0 (resolvido: 1.8.2) | `components/signal_processing/idf_component.yml` | FFT (`dsps_fft`), janela Hann, cálculo da janela com folga (~11 ms/janela) |
-| Teste | `unity` (componente ESP-IDF) | 2.6.0 | provido pelo ESP-IDF | Corpus em `components/*/test/`, executado on-target |
-| Firmware | - | C/C++ sobre FreeRTOS | `main/main.c`, `components/*` | Aquisição, DSP, classificação, conectividade |
-| Broker MQTT | Mosquitto (local) ou broker público de teste | qualquer recente | externo ao repo | Recebe `pulsopnaat/#` (tópicos e broker de bancada em §7.1/§9.3) |
-| Ferramentas host | git, Python 3 (via ESP-IDF), driver USB-serial da Heltec | - | SO do desenvolvedor | Clone, build/flash/monitor, console serial |
- 
-> Nada além do ESP-IDF precisa ser instalado manualmente para as bibliotecas: `idf.py
-> build` resolve `bno085` e `esp-dsp` pelo registry e trava as versões em
-> `dependencies.lock`.
- 
----
- 
-## 6. Pré-requisitos
- 
-1. ESP-IDF ≥ 5.5 instalado (com o ambiente exportado a cada sessão, ver §8).
-2. Placa Heltec WiFi LoRa 32 V3 + módulo GY-BNO085 ligados conforme §3.2
-   (atenção ao endereço 0x4A e a PS0/PS1 em GND).
-3. Cabo USB de dados (não só de carga) + driver USB-serial reconhecendo a placa.
-4. Rede Wi-Fi **2,4 GHz** acessível + broker MQTT rodando nela (para a fase com
-   conectividade; aquisição/classificação/sinalização funcionam sem rede). O ESP32-S3
-   **não conecta em 5 GHz** — se usar hotspot de celular, force a banda 2,4 GHz
-   explicitamente (muitos hotspots sobem em 5 GHz por padrão e a placa não vê a rede).
-5. Git.
----
- 
-## 7. Configuração
- 
-Toda configuração é via `menuconfig`. Os símbolos ficam em `main/Kconfig.projbuild` (I2C/aquisição/RPM/node),
-`components/alert_manager/Kconfig` (LED/buzzer/botão/k), `components/wifi_config/Kconfig` (SSID/senha/retries)
-e `components/mqtt_client/Kconfig` (broker URI). Nenhuma credencial vai no código-fonte:
- 
-```bash
-idf.py menuconfig
-```
- 
-| Onde | Parâmetro | Default | O que significa |
-|---|---|---|---|
-| `PulsoPNAAT → I2C & GPIO` | SDA / SCL / INT / RST | 6 / 7 / 5 / 4 | Pinagem da §3.2 |
-| `PulsoPNAAT → I2C & GPIO` | I2C Address | 0x4A | SA0=GND; 0x4B se SA0=VCC; 0x28 não responde |
-| `PulsoPNAAT → I2C & GPIO` | I2C Clock | 400 kHz | Barramento do sensor |
-| `PulsoPNAAT → Aquisição` | Reporte LINEAR_ACCELERATION | 2500 µs | Pede 400 Hz; o sensor limita ao máximo do reporte → fs = 400 Hz, N = 400, Nyquist 200 Hz |
-| `PulsoPNAAT → Aquisição` | Fila de janelas | 2 | Janelas de ~4,8 KB; cheia → descarta a mais antiga (amostragem nunca bloqueia) |
-| `PulsoPNAAT → Equipamento` | RPM nominal | 1500 | Define f0 = RPM/60 (25 Hz); harmônicos 1x/2x/banda 3x-5x; por equipamento, sem autodetecção |
-| `PulsoPNAAT → Conectividade` | Node ID | `pulsopnaat-01` | Campo `node` do JSON |
-| `WiFi Configuration` | SSID / Password / retries | "" / "" / 5 | Credenciais da rede; ficam só na configuração local; **rede precisa ser 2,4 GHz** (ver §6) |
-| `MQTT Client` | Broker URI | `mqtt://localhost:1883` | Apontar para o broker da bancada (padrão de testes em §7.1) |
-| `alert_manager` | LED R/G/B, buzzer, botão, k confirmação | 39/40/41, 42, 0, 3 | Ver §3.4; k = janelas consecutivas para confirmar mudança de estado |
-| `PulsoPNAAT → Armazenamento` | SD SCK/MOSI/MISO/CS | 33/34/47/48 | Ver §3.5 |
-| `PulsoPNAAT → Armazenamento` | SD clock máximo | 4000 kHz | Mais tolerante a fiação de protoboard |
-| `PulsoPNAAT → Armazenamento` | Rotação/espaço mínimo | 15 min / 10 MB | Ver §9.5 |
-| `PulsoPNAAT → Armazenamento` | Endereço I2C do RTC | 0x68 | Mesmo barramento do BNO085 |
-| `PulsoPNAAT → Amostragem` | Watchdog timeout/backoff | 3000/2000 ms | Ver §12.1 |
- 
-Notas:
- 
-- O serial imprime no boot a configuração efetiva (f0, taxa) e, por janela, a taxa
-  efetiva medida pelos timestamps SH-2, a fs efetiva é a que vale no mapeamento de
-  bins (fallback: nominal 400 Hz).
-- Baseline persiste em NVS (namespace `pnaat`, chave `baseline`, 156 B com mágica+CRC).
-  Registro corrompido é descartado com log, nunca interpretado.
-### 7.1 Rede e broker MQTT da bancada (para reproduzir/gravar o vídeo)
- 
-**Wi-Fi:** hotspot ou roteador em **2,4 GHz** — ver aviso em §6, o módulo não enxerga
-rede 5 GHz.
- 
-**Broker MQTT usado nos testes de bancada** (broker público — ver ressalva abaixo):
- 
-| Campo | Valor |
-|---|---|
-| Link do broker | `mqtt://broker.mqttdashboard.com` |
-| Host | `broker.mqttdashboard.com` |
-| Porta | `1883` |
-| Protocolo | `mqtt://` |
-| Encryption (TLS) | desligado (o firmware conecta sem TLS) |
-| Validate certificate | desligado |
-| Username / Password | em branco |
- 
-Dashboard cliente pra acompanhar sem instalar nada — **MQTT Websocket Client**:
-<https://www.hivemq.com/demos/websocket-client/> (aponta pro mesmo host acima).
- 
-> É um broker **público e compartilhado** por milhares de outros clientes — pode ficar
-> instável sob carga (desconexões e timeouts aleatórios, ver §12). Para uma
-> apresentação decisiva ou coleta de dados longa, prefira um Mosquitto local
-> (`MQTT Client → Broker URI` apontando pro IP da bancada, ver §8).
- 
-**Tópicos:**
- 
-| Tópico | Conteúdo |
-|---|---|
-| `pulsopnaat/sensor/data` | dados brutos/periódicos do sensor |
-| `pulsopnaat/alert` | alerta ao confirmar atenção/crítico (RF05, ver §9.3) |
-| `pulsopnaat/status` | status do nó ao conectar e sob comando |
-| `pulsopnaat/command` | comandos pro nó (`calibrar`, `status`) |
-| `pulsopnaat/#` | assina tudo de uma vez (bom pro MQTT Explorer ou pro dashboard acima) |
- 
----
- 
-## 8. Como compilar, gravar e monitorar
- 
-Do zero, em ambiente limpo (reprodutível):
- 
-```bash
-# 0. Clonar
-git clone git@github.com:jhonatan-goncalves-pereira/pulsopnaat.git
-cd pulsopnaat
- 
-# 1. Ativar o ESP-IDF (toda sessão/shell nova. caminho pode variar dependendo do setup)
-source ~/.espressif/tools/activate_idf_v5.5.5.sh
- 
-# 2. Selecionar o alvo (uma vez por clone)
-idf.py set-target esp32s3
- 
-# 3. (Opcional) ajustar Wi-Fi/MQTT/RPM/pinos
-idf.py menuconfig
- 
-# 3b. (Para a fase com conectividade) rede 2,4 GHz + broker MQTT (local ou o
-# público de bancada em §7.1) e apontar `MQTT Client → Broker URI` pra ele.
-# O default `mqtt://localhost:1883` só vale com broker no próprio host.
-# Sem rede, aquisição/classificação/sinalização seguem normais (CONTINGÊNCIA).
- 
-# 4. Compilar
-idf.py build
- 
-# 5. Gravar e abrir o monitor serial
-idf.py flash monitor
-# sair do monitor: Ctrl+]
-```
- 
-Se `idf.py build` termina sem erro, toolchain + `bno085` + `esp-dsp` estão resolvidos.
-O serial mostra CSV de 18 valores/janela (6 métricas × 3 eixos) mais logs de estado:
- 
-```
-# rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,...,thd_z   (m/s²; kurt/THD adimensionais)
-```
- 
-> Apagou algo da NVS ou trocou de bancada? `idf.py erase-flash` limpa o baseline salvo
-> (o nó volta a pedir calibração, comportamento esperado, não defeito).
- 
-### 8.1 Partição "factory" pequena demais (`app partition is too small`)
- 
-Com o componente `storage` (FATFS + SDMMC + mbedTLS) integrado, o binário passa de
-1 MB — a tabela de partições single-app padrão do ESP-IDF só reserva 1 MB pro app. A
-flash é de 2 MB, então sobra espaço; só falta a tabela de partições usar mais dele:
- 
-```bash
-idf.py menuconfig
-# Navegue até "Partition Table" → "Partition Table" e mude de
-# "Single factory app, no OTA" para "Single factory app (large), no OTA".
-# Isso troca o CSV interno do IDF para um que reserva quase toda a flash de
-# 2 MB pro app (bem mais que os atuais 1 MB), sem precisar escrever um
-# partitions.csv customizado.
-# S (salvar), Q (sair)
- 
-idf.py fullclean build flash monitor
-```
- 
-`fullclean` é importante aqui — a partição muda de offset/tamanho, um build
-incremental por cima da tabela antiga pode dar erro de md5/offset no flash.
- 
----
- 
-## 9. Como operar
- 
-### 9.1 Calibrar (obrigatório antes de classificar)
- 
-Sem baseline válido o nó fica em `BOOT` descartando janelas. Não há classificação
-sem baseline (decisão travada). Com o equipamento em regime saudável estável
-(passada a partida/aquecimento):
- 
-- Botão: pressione o BOOT (GPIO 0), ou
-- Serial: digite `calibrar` (insensível a maiúsculas), ou
-- MQTT: publique `calibrar` em `pulsopnaat/command`.
-LED azul piscando por 30 janelas (~30 s) → baseline (média/σ por métrica e eixo)
-salvo em NVS → `MONITORANDO`. Reboot carrega da NVS e volta direto a monitorar.
-Diagnóstico a qualquer momento: comando `status` (serial ou MQTT), estado da máquina,
-estado do equipamento, baseline presente/ausente, uptime e RMS médio±σ.
- 
-### 9.2 Classificação (o que cada cor significa)
- 
-| Estado | Condição (por janela, após confirmação k=3) | LED | Buzzer |
-|---|---|---|---|
-| Verde (normal) | nenhuma métrica além de mean+3σ | verde fixo | off |
-| Amarelo (atenção) | 1-2 métricas além de mean+3σ | amarelo (R+G) piscando | off |
-| Vermelho (crítico) | 1 métrica além de mean+6σ ou 3 em atenção | vermelho fixo | on |
-| Sem conectividade | Wi-Fi fora (máquina em CONTINGÊNCIA) | branco (R+G+B) piscando | só se equipamento crítico |
- 
-Estado do equipamento = pior eixo (falha uniaxial não é diluída). A mudança só se
-efetiva após 3 janelas consecutivas do mesmo candidato (histerese simétrica, inclusive
-na volta ao verde). Blips de 1 janela (ex.: picos de kurtosis sobre ruído de
-quantização em repouso) não flipam o alarme; falha real persiste e confirma em ~3 s.
- 
-### 9.3 MQTT (alerta remoto)
- 
-| Tópico | Direção | Conteúdo |
-|---|---|---|
-| `pulsopnaat/alert` | nó → broker | `{"node":"...","ts_us":…,"estado":"...","rms_x":…,"rms_y":…,"rms_z":…}` ao confirmar atenção/crítico |
-| `pulsopnaat/status` | nó → broker | `{"node":"...","maquina":"...","equipamento":"...","baseline":true,"uptime_s":…}` ao conectar e sob comando |
-| `pulsopnaat/telemetria` | nó → broker | a cada janela (1 Hz): máquina, equipamento, `nivel` (0 verde, 1 amarelo, 2 vermelho), as 18 métricas, `score` (ou `null` sem modelo), `anomalia` e `rotulo` — consumido pelo Telegraf/Grafana (§9.6) |
-| `pulsopnaat/command` | broker → nó | `calibrar`, `status` ou rótulo do dataset `saudavel` / `falha` / `sem_rotulo` (RF15, §9.7) — comparação exata, `calibrar\n` não dispara |
- 
-Dados de conexão (host, porta, dashboard, todos os tópicos) em §7.1.
- 
-Publicação em task separada de baixa prioridade: rede nunca bloqueia amostragem.
-Formato (`mqtt_formatar_alerta` em `components/mqtt_client/mqtt_payloads.c`):
-node, ts_us, estado + RMS por eixo (~150 B, folga no buffer de 192 B em `main/main.c:74`).
- 
-### 9.4 Demo de anomalia (roteiro de bancada)
- 
-1. Nó em `MONITORANDO` verde, equipamento saudável.
-2. Induza vibração (toque/estímulo na carcaça).
-3. LED amarelo → vermelho + buzzer em ~3 s; alerta em `pulsopnaat/alert`.
-4. Remova o estímulo → após 3 janelas limpas, volta a verde.
-
-### 9.5 Data logging (microSD + RTC) — para que serve
-
-RF12/RNF09. Cada janela processada (fora do estado `BOOT`) é enfileirada para uma task
-**dedicada de baixa prioridade** que grava um CSV no cartão — a amostragem e o DSP
-**nunca** esperam por I/O de SD (RNF09). Timestamp vem do RTC DS3231 (§3.5), no mesmo
-barramento I2C do BNO085; sem RTC, cai para `boot+<segundos>`.
-
-**Por que isso importa além de "ter um log":**
-
-- **Constrói o dataset rotulado** necessário antes de sequer cogitar o detector de
-  anomalia offline (Mahalanobis/K-means) mencionado em §1 — não dá pra treinar nada
-  sem operação saudável real registrada.
-- **Evidência auditável** por trás de cada alerta — RF05 já manda o payload MQTT com
-  o valor de cada métrica, mas o CSV é o que sustenta uma investigação posterior.
-
-**Onde/como:**
-
-- `/sdcard/pulso/log_<timestamp ou boot_ms>.csv`, append, sobrevive a reboot.
-- Hora do RTC acertada automaticamente via SNTP (`pool.ntp.org`) quando o Wi-Fi
-  conecta e ressincronizada a cada hora; sem rede, o DS3231 mantém a última hora boa.
-- Cartão ausente ou que falhou ao montar: a task de storage tenta montar de novo a
-  cada 10 s, então dá pra reencaixar o cartão sem reiniciar o nó.
-- Rotação por tempo (`CONFIG_PULSOPNAAT_LOG_ROTACAO_MIN`, default 15 min): cada
-  arquivo cobre uma janela fixa — o histórico completo é a sequência de arquivos,
-  não um único CSV gigante.
-- Poda por capacidade (`CONFIG_PULSOPNAAT_LOG_ESPACO_MINIMO_KB`, default 10 MB
-  livres): rede de segurança, **não** é retenção por padrão — o padrão é acúmulo
-  persistente. Só apaga os `.csv` mais antigos se o espaço livre cair abaixo do
-  limite, pra um cartão cheio nunca travar a escrita (RNF09).
-- Falha de SD ou RTC **degrada, não trava**: monitoramento, LED/buzzer e MQTT
-  seguem normalmente; só o log fica ausente (contabilizado em log agregado, não
-  por linha, pra não floodar o console).
-
-**Formato do CSV:**
-´´´
-timestamp,node_id,estado_maquina,estado_equipamento,rms_x,h1x_x,h2x_x,b3x5_x,kurt_x,thd_x,rms_y,...,thd_z,rotulo,score_anomalia,anomalia
-2026-09-15T21:09:30Z,pulsopnaat-01,MONITORANDO,VERDE,0.0224,0.0036,...,saudavel,1.8420,0
-´´´
-
-### 9.6 Observabilidade: MQTT → Grafana
 
 ![Componentes → MQTT → Grafana](docs/img/pulsopnaat_horizontal_mqtt_grafana.gif)
 
-O nó tem **dois caminhos de observabilidade** independentes:
+### 2.3 Tarefas do firmware
 
-- **Tempo real (MQTT → Telegraf → InfluxDB → Grafana):** a cada janela o nó publica em
-  `pulsopnaat/telemetria` as 18 métricas, o estado (com `nivel` numérico 0/1/2), o score
-  do detector (§9.7) e o rótulo do dataset; alertas e status seguem em `pulsopnaat/alert`
-  e `pulsopnaat/status` (§9.3). O Telegraf grava tudo no InfluxDB e o dashboard
-  **PulsoPNAAT — Monitoramento em tempo real** mostra estado atual, histórico colorido por
-  estado (RF11), RMS/1x/kurtosis por eixo, score do detector e a tabela de alertas.
-  Como subir a stack: [README_DOCKER.md](README_DOCKER.md).
-- **Histórico longo (CSV do cartão):** o CSV do SD (§9.5) cobre inclusive os períodos sem
-  rede e é a base do treino do detector (§9.7). Dá pra importá-lo no Grafana via plugin
-  CSV/Infinity quando precisar olhar períodos antigos.
+As tarefas se comunicam só por filas: a rede e o cartão nunca bloqueiam a amostragem.
 
-Passo a passo pra olhar o CSV no Grafana:
+| Tarefa | Núcleo | Prioridade | Função | Onde está |
+|---|---|---|---|---|
+| `amostragem` | 0 | 10 | Lê o BNO085, monta a janela de 1 s e reinicia o sensor se ele parar | `components/vibration_sensor` |
+| `processamento` | 1 | 5 | Hampel, FFT, métricas, calibração, modelo e decisão do estado | `main/main.c` |
+| `alerta` | 1 | 3 | Máquina de estados, LED (atualizado a cada 100 ms) e buzzer | `components/alert_manager/alerta_servico.c` |
+| `storage` | 0 | 3 | Grava o CSV, lê o RTC e remonta o cartão a cada 10 s se ele sair | `components/storage` |
+| `conectividade` | 1 | 2 | Inicia o MQTT, publica telemetria, alertas e status, trata comandos | `main/main.c` |
+| `comandos` | 0 | 2 | Botão BOOT e comandos pela serial | `main/main.c` |
 
-1. Deixe o nó rodando até fechar pelo menos um arquivo completo de log (§9.5).
-2. Retire o cartão, leia num adaptador USB no PC.
-3. Grafana → plugin **Infinity** (ou datasource CSV nativo) → aponta pro `.csv`.
-4. Série temporal com `timestamp` no eixo X e `rms_x`/`rms_y`/`rms_z` como séries;
-   colorir por `estado_equipamento` pra visualizar a transição verde→vermelho.
+### 2.4 Máquina de estados e sinalização
 
-### 9.7 Detector de anomalia (Edge AI em modo sombra, §5.4)
+| Estado | Quando | LED | Buzzer |
+|---|---|---|---|
+| `BOOT` | Sem baseline calibrado | apagado | desligado |
+| `CALIBRANDO` | 30 janelas após o comando `calibrar` | azul piscando rápido | desligado |
+| `MONITORANDO` | Baseline pronto e Wi-Fi conectado | verde (saudável), amarelo piscando (atenção) ou vermelho fixo (crítico) | só em crítico |
+| `CONTINGÊNCIA` | Wi-Fi indisponível; continua medindo e gravando | branco piscando | só em crítico |
 
-Complementa a votação por limiares com um detector não supervisionado: distância de
-Mahalanobis do vetor de 18 métricas contra a operação saudável do próprio equipamento.
-O treino é offline (Python + `numpy`, com os CSVs do cartão) e o ESP32 só calcula o score
-a cada janela. Roda em **modo sombra**: grava `score_anomalia`/`anomalia` no CSV e loga as
-transições, mas LED, buzzer e alertas MQTT continuam decididos pelos limiares até o
-relatório mostrar que o detector é melhor (portão de decisão da §5.4).
+Um reinício com baseline salvo na NVS volta direto para `MONITORANDO`.
 
-Fluxo completo:
+---
 
-1. Calibre o baseline com o equipamento em regime saudável (§9.1).
-2. Rotule a coleta (RF15), pela serial ou publicando em `pulsopnaat/command`:
-   `saudavel` e deixe rodando alguns minutos; `falha` e induza a falha (ex.: peso numa pá
-   do ventilador) por 1-2 min; `sem_rotulo` encerra a marcação.
-3. Tire o cartão e treine:
-   ```bash
-   python tools/classificador/treinar_detector.py F:/pulso
-   ```
-   Gera `components/anomaly_detector/modelo_anomalia.h` e
-   `tools/classificador/relatorio_detector.md` (matriz de confusão do detector × limiares,
-   taxa de falso positivo e o veredito do portão de decisão).
-4. `idf.py build flash`: o boot mostra `detector de anomalia embarcado (modo sombra)` e o
-   comando `status` passa a exibir `score`, `limiar` e `rotulo`.
+## 3. Estrutura do repositório
 
-Parâmetros: `--quantil-limiar` (padrão 0,995 das distâncias de treino) e `--fracao-teste`
-(padrão: 30% finais das janelas saudáveis, em ordem cronológica). Sem treino, o
-`modelo_anomalia.h` é um placeholder e o firmware roda sem detector.
- ---
-## 10. Como testar
- 
-Corpus Unity (v2.6.0, componente `unity` do ESP-IDF) em `components/*/test/`,
-executado on-target, valida o comportamento float e o esp-dsp no próprio Xtensa:
- 
-```bash
-idf.py -C test_app set-target esp32s3   # uma vez
-idf.py -C test_app build flash monitor
-# resumo no serial: "N Tests 0 Failures 0 Ignored / OK"
 ```
- 
+.
+├── main/                          app_main: filas, tarefas e ligação entre os componentes
+│   ├── main.c  Kconfig.projbuild  idf_component.yml  CMakeLists.txt
+├── components/                    cada componente tem include/, CMakeLists.txt e test/ quando testado
+│   ├── i2c_config/                barramento I2C e dispositivo BNO085
+│   ├── vibration_sensor/          aquisição a 400 Hz, janelas de 1 s e reinício do sensor
+│   ├── signal_processing/         RMS, Hann, FFT-512, harmônicas, kurtosis, THD e Hampel
+│   ├── baseline/                  calibração (30 janelas, Welford) e gravação na NVS
+│   ├── alert_manager/             limiares 3σ/6σ, votação, máquina de estados, LED e buzzer
+│   ├── regime_classifier/         modelo treinado: condição (parado, vel1–3, falha) e saúde
+│   ├── anomaly_detector/          features log e detector Mahalanobis de uma classe
+│   ├── wifi_config/               Wi-Fi station com reconexão automática
+│   ├── mqtt_client/               cliente MQTT e JSON de alerta, status e telemetria
+│   └── storage/                   CSV no microSD e RTC DS3231
+├── test_app/                      app de testes Unity que roda na própria placa
+├── tools/
+│   ├── classificador/             treinar_regime.py, treinar_detector.py e relatórios gerados
+│   └── stack/subir_stack_wsl.ps1  sobe a stack Docker no WSL2
+├── dataset/ventilador/            dataset rotulado da bancada (CSVs, trechos e README)
+├── grafana/provisioning/          datasource InfluxDB e dashboards do Grafana
+├── docker-compose.yml             Mosquitto, InfluxDB, Telegraf, Grafana e túnel opcional
+├── telegraf.conf  mosquitto/  .env.example
+├── docs/img/                      cabeçalho, pinout, protoboard e animação da arquitetura
+├── sdkconfig.defaults             configuração padrão do firmware (versionada)
+├── dependencies.lock              versões travadas das bibliotecas do ESP-IDF
+├── README_DOCKER.md               detalhes da stack Docker
+├── Entregavel06Documentacao.md    documento da Entrega 6
+└── README.md                      este manual
+```
+
+A parte de cálculo e decisão (`signal_processing`, `baseline`, `alert_manager`, `regime_classifier`,
+`anomaly_detector`, `mqtt_payloads.c`) não depende de hardware, e por isso tem testes automatizados.
+O acesso ao hardware (`i2c_config`, `vibration_sensor`, `wifi_config`, `pnaat_mqtt_client.c`,
+`alerta_servico.c`, `storage`) fica nas bordas. Cada arquivo de código começa com um comentário que
+explica sua função.
+
+---
+
+## 4. Pré-requisitos
+
+### 4.1 Hardware
+
+| Item | Uso | Observação |
+|---|---|---|
+| Heltec WiFi LoRa 32 V3 (ESP32-S3) | Processamento, Wi-Fi, LED e buzzer | Cabo USB-C de dados (cabo só de carga não grava) |
+| Módulo GY-BNO085 | Acelerômetro de 3 eixos | Modo I2C: PS0 e PS1 no GND |
+| RTC DS3231 | Hora dos registros | Mesmo barramento I2C do BNO085 |
+| Módulo microSD SPI com regulador + cartão | Registro em CSV | Cartão em FAT32. Funcionou com 16 GB; um de 128 GB em exFAT não montou |
+| LED RGB catodo comum + 3 resistores de 220–330 Ω | Sinalização | Anodo comum também serve, trocando a polaridade no `menuconfig` |
+| Buzzer ativo | Alarme de estado crítico | Liga e desliga por nível lógico |
+| Protoboard e jumpers curtos | Montagem | Fios do I2C curtos e longe do cabo de força do motor |
+| Ventilador de 3 velocidades | Equipamento da bancada | Sensor preso firme na carcaça |
+| Filtro de linha com mau contato | Falha de alimentação da demonstração | Opcional, só para reproduzir a falha |
+
+### 4.2 Software
+
+| Software | Versão usada | Uso |
+|---|---|---|
+| ESP-IDF | 5.5.5 (Windows, instalador EIM) | Compilar, gravar e monitorar o firmware |
+| Driver CP210x (Silicon Labs) | — | A placa aparece como porta COM (ex.: `COM4`) ou `/dev/ttyUSB0` |
+| Git | — | Clonar o repositório |
+| Docker Engine + Compose v2 | Docker 29.1.3, Compose 2.40.3 | Stack MQTT → Telegraf → InfluxDB → Grafana |
+| WSL2 + Ubuntu 22.04 | — | Só no Windows sem Docker Desktop |
+| Python 3 + `numpy` | Python 3.11, numpy 2.4 | Treinar o modelo com o dataset |
+
+### 4.3 Rede
+
+Wi-Fi de **2,4 GHz** com internet. O ESP32-S3 não conecta em 5 GHz: num hotspot de celular, force a
+banda de 2,4 GHz. O nó usa a internet para o broker MQTT público e o NTP; o PC, para baixar as
+imagens Docker e publicar o link do Grafana.
+
+---
+
+## 5. Dependências e instalação
+
+### 5.1 Dependências
+
+| Dependência | Versão | De onde vem | Para quê |
+|---|---|---|---|
+| ESP-IDF | 5.5.5 | Instalador da Espressif | Toolchain, FreeRTOS, Wi-Fi, MQTT, NVS, FATFS, Unity |
+| `rinku404/bno085` | 1.2.0 | `main/idf_component.yml` | Driver SH-2 do BNO085 |
+| `espressif/esp-dsp` | ^1.6.0 (resolvido 1.8.2) | `components/signal_processing/idf_component.yml` | FFT e janela de Hann |
+| `numpy` | 2.x | `pip` | Treino do modelo |
+| `eclipse-mosquitto` | 2 | `docker-compose.yml` | Broker MQTT local (opcional) |
+| `influxdb` | 2.7 | `docker-compose.yml` | Banco de séries temporais |
+| `telegraf` | 1.30 | `docker-compose.yml` | Leva as mensagens MQTT para o InfluxDB |
+| `grafana/grafana` | latest | `docker-compose.yml` | Dashboard |
+| `cloudflare/cloudflared` | latest | `docker-compose.yml` (perfil `online`) | Link público do Grafana |
+
+As bibliotecas do firmware são baixadas no primeiro `idf.py build`, com as versões travadas em
+`dependencies.lock`.
+
+### 5.2 Repositório
+
+```bash
+git clone https://github.com/jhonatan-goncalves-pereira/pulsopnaat.git
+cd pulsopnaat
+```
+
+### 5.3 ESP-IDF 5.5.5
+
+Instale pelo guia oficial do ESP32-S3:
+<https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/>. Em cada terminal novo,
+ative o ambiente:
+
+```powershell
+# Windows (caminho padrão do instalador EIM)
+. 'C:\Espressif\tools\Microsoft.v5.5.5.PowerShell_profile.ps1'
+```
+
+```bash
+# Linux/macOS (depende de onde o ESP-IDF foi instalado)
+. $HOME/esp/esp-idf/export.sh
+```
+
+Num clone novo, escolha o alvo uma vez. Cuidado: `set-target` recria o `sdkconfig` e apaga o Wi-Fi e
+o broker que já estavam configurados.
+
+```bash
+idf.py set-target esp32s3
+```
+
+### 5.4 Docker
+
+No Linux, no macOS ou no Windows com Docker Desktop, basta instalar o Docker. No Windows sem Docker
+Desktop (por exemplo, com erro 14098 ao ativar o Hyper-V), rode uma vez no PowerShell:
+
+```powershell
+wsl --install -d Ubuntu --web-download --no-launch
+& "$env:LOCALAPPDATA\Microsoft\WindowsApps\ubuntu.exe" install --root
+wsl -d Ubuntu -u root -- apt-get update
+wsl -d Ubuntu -u root -- apt-get install -y docker.io docker-compose-v2
+```
+
+### 5.5 Python
+
+```bash
+python -m pip install numpy
+```
+
+---
+
+## 6. Configuração
+
+### 6.1 Firmware (`idf.py menuconfig`)
+
+| Menu | Opção | Valor na bancada | Precisa mudar? |
+|---|---|---|---|
+| `Component config → WiFi Configuration` | WiFi SSID / WiFi Password | Rede de 2,4 GHz | Sim. Com SSID vazio a placa reinicia em loop, porque o `app_main` aborta quando o Wi-Fi não inicia |
+| `Component config → MQTT Client Configuration` | MQTT Broker URI | `mqtt://broker.mqttdashboard.com:1883` | Sim. O padrão `mqtt://localhost:1883` não funciona no ESP32 |
+| `PulsoPNAAT → Equipamento monitorado` | RPM nominal | 1500 | Só em outro equipamento: define onde a FFT procura as harmônicas |
+| `PulsoPNAAT → Conectividade (MQTT)` | Node ID | `pulsopnaat-01` | Não |
+| `PulsoPNAAT → I2C & GPIO (BNO085)` | SDA, SCL, INT, RST, endereço | 6, 7, 5, 4, 0x4A | Só se a fiação for outra |
+| `Component config → PulsoPNAAT: sinalização local…` | GPIOs, polaridade do LED/buzzer, janelas de confirmação | 39/40/41, 42, catodo comum, 3 | Só se a fiação for outra |
+| `Component config → PulsoPNAAT: Armazenamento…` | GPIOs do SPI, rotação do log, endereço do RTC | 33/34/47/48, 15 min, 0x68 | Só se a fiação for outra |
+
+Essas escolhas ficam no `sdkconfig`, que não vai para o Git. Os padrões versionados estão em
+`sdkconfig.defaults` (incluindo a partição grande para o firmware, que passa de 1 MB).
+
+### 6.2 Stack de observabilidade (`.env`)
+
+```bash
+cp .env.example .env        # Windows: Copy-Item .env.example .env
+```
+
+Nenhum valor do `.env` vem de um serviço externo. O InfluxDB e o Grafana rodam nos contêineres da
+própria stack e são criados com o que estiver nesse arquivo na primeira vez que sobem. O `.env` não
+vai para o Git.
+
+| Variável | O que é | Como preencher |
+|---|---|---|
+| `INFLUXDB_USERNAME` / `INFLUXDB_PASSWORD` | Admin do InfluxDB (`http://localhost:8086`) | Escolha; a senha precisa de pelo menos 8 caracteres |
+| `INFLUXDB_ORG` / `INFLUXDB_BUCKET` | Organização e bucket usados pelo Telegraf e pelo Grafana | Organização livre (padrão `myorg`); o bucket precisa ser `mqtt_data`, que é o nome usado nas consultas do dashboard |
+| `INFLUXDB_TOKEN` | Token do Telegraf e do Grafana | Uma sequência aleatória: `openssl rand -hex 32` ou, no PowerShell, `[guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')` |
+| `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` | Login de administrador do Grafana | Escolha; use senha forte se for publicar o link |
+| `GRAFANA_ANONYMOUS_ENABLED` | `true` deixa ver o dashboard sem login, só leitura | `true` na apresentação |
+| `GRAFANA_PORT` | Porta do Grafana no PC | `3000`, ou `3001` se a 3000 estiver ocupada |
+| `MQTT_BROKER` | Broker que o Telegraf assina | O mesmo do firmware, com `tcp://`: `tcp://broker.mqttdashboard.com:1883` |
+
+Os valores `INFLUXDB_*` e `GRAFANA_ADMIN_*` só são lidos quando os volumes são criados. Para trocar a
+senha do Grafana depois, use `docker exec grafana grafana cli admin reset-admin-password <nova-senha>`.
+Para trocar os do InfluxDB, rode `docker compose down -v` (apaga os dados) e suba de novo. Mais
+detalhes da stack em [README_DOCKER.md](README_DOCKER.md).
+
+### 6.3 Calibração do baseline (RF08)
+
+Sem baseline o nó fica em `BOOT` e não publica telemetria. A calibração nunca é automática:
+
+1. Deixe o equipamento funcionando normalmente, já estabilizado.
+2. Aperte o botão BOOT da placa, digite `calibrar` no monitor serial ou publique `calibrar` em
+   `pulsopnaat/command` (por exemplo no
+   [HiveMQ WebSocket Client](https://www.hivemq.com/demos/websocket-client/), conectado a
+   `broker.mqttdashboard.com`).
+3. Não encoste no equipamento por uns 30 s. O LED fica azul piscando.
+4. O serial mostra `baseline calibrado (30 janelas) e salvo na NVS`.
+
+O baseline fica gravado na NVS e sobrevive a reinícios. A calibração também funciona sem Wi-Fi. Com o
+modelo treinado embarcado, quem decide o LED é o modelo, e os limiares da calibração ficam só como
+comparação.
+
+### 6.4 Tópicos MQTT
+
+| Tópico | Direção | Conteúdo |
+|---|---|---|
+| `pulsopnaat/telemetria` | nó → broker | Uma vez por segundo: máquina de estados, estado (`nivel` 0/1/2), as 18 métricas, `regime` (0 parado, 1–3 velocidade, 4 falha), `dist_regime`, `nivel_limiares` e `rotulo` |
+| `pulsopnaat/alert` | nó → broker | Quando o estado confirmado muda para atenção ou crítico: `node`, `ts_us`, `estado`, `rms_x/y/z` |
+| `pulsopnaat/status` | nó → broker | Ao conectar e sob o comando `status`: máquina, estado, baseline e uptime |
+| `pulsopnaat/command` | broker → nó | `calibrar`, `status` ou um rótulo (`parado`, `vel1`, `vel2`, `vel3`, `saudavel`, `falha`, `sem_rotulo`) |
+
+O broker público `broker.mqttdashboard.com` é compartilhado e pode oscilar. Para uma instalação sem
+depender da internet, use o Mosquitto da stack (`tcp://mosquitto:1883` no `.env` e o IP do PC no
+firmware).
+
+---
+
+## 7. Montagem elétrica
+
+### 7.1 Esquema
+
+Todos os módulos usam o GND da placa. O BNO085 e o DS3231 dividem o mesmo barramento I2C.
+
+```mermaid
+flowchart LR
+    USB["PC ou fonte USB 5 V"]
+    ESP["Heltec WiFi LoRa 32 V3<br/>ESP32-S3"]
+    BTN["Botão BOOT onboard<br/>GPIO 0 · ativo baixo<br/>pull-up interno"]
+    FAN["Equipamento monitorado<br/>(ventilador da bancada)"]
+    I2C(["Barramento I2C<br/>400 kHz"])
+    BNO["GY-BNO085 · endereço 0x4A<br/>VCC → 3V3 · GND → GND<br/>PS0, PS1 e AD0 → GND"]
+    RTC["RTC DS3231 · endereço 0x68<br/>VCC → 3V3 · GND → GND"]
+    SD["Módulo microSD SPI<br/>VCC → 5V · GND → GND<br/>regulador AMS1117 · cartão FAT32"]
+    LED["LED RGB catodo comum<br/>catodo → GND<br/>resistor 220–330 Ω por canal"]
+    BZ["Buzzer ativo<br/>− → GND"]
+
+    USB ---|"USB-C: alimentação + serial"| ESP
+    BTN -.- ESP
+    FAN -.-|"fixação rígida"| BNO
+    ESP ---|"GPIO 5 ← INT<br/>GPIO 4 → RST"| BNO
+    ESP ---|"GPIO 6 ↔ SDA<br/>GPIO 7 → SCL"| I2C
+    I2C --- BNO
+    I2C --- RTC
+    ESP ---|"GPIO 33 → SCK<br/>GPIO 34 → MOSI<br/>GPIO 47 ← MISO (serigrafia MOSO)<br/>GPIO 48 → CS"| SD
+    ESP ---|"GPIO 39 → R<br/>GPIO 40 → G<br/>GPIO 41 → B"| LED
+    ESP ---|"GPIO 42 → +"| BZ
+```
+
+Pinagem tirada de `main/Kconfig.projbuild`, `components/alert_manager/Kconfig` e
+`components/storage/Kconfig`.
+
+| Heltec V3 | GY-BNO085 | DS3231 | microSD | LED RGB | Buzzer |
+|---|---|---|---|---|---|
+| 3V3 | VCC | VCC | — | — | — |
+| 5V | — | — | VCC | — | — |
+| GND | GND, PS0, PS1, AD0 | GND | GND | catodo | − |
+| GPIO 6 | SDA | SDA | — | — | — |
+| GPIO 7 | SCL | SCL | — | — | — |
+| GPIO 5 | INT | — | — | — | — |
+| GPIO 4 | RST | — | — | — | — |
+| GPIO 33 | — | — | SCK | — | — |
+| GPIO 34 | — | — | MOSI | — | — |
+| GPIO 47 | — | — | MISO ("MOSO") | — | — |
+| GPIO 48 | — | — | CS | — | — |
+| GPIO 39 / 40 / 41 | — | — | — | R / G / B (com resistor) | — |
+| GPIO 42 | — | — | — | — | + |
+
+Pinagem resumida:
+
+![Pinagem do PulsoPNAAT](docs/img/pulsopnaat_pinout.svg)
+
+Ilustração da protoboard ([PulsoPNAAT_protoboard.svg](docs/img/PulsoPNAAT_protoboard.svg)):
+
+![Protoboard do PulsoPNAAT](docs/img/PulsoPNAAT_protoboard.svg)
+
+<img width="1489" height="982" alt="Resumo visual da pinagem" src="https://github.com/user-attachments/assets/76a13cb4-d9c0-4fd0-b549-54f89a7d1ead" />
+
+### 7.2 Passo a passo
+
+Com a placa desligada do USB:
+
+1. Ligue o GND da Heltec na linha negativa da protoboard; todos os módulos usam esse GND.
+2. GY-BNO085: VCC no 3V3, GND no GND, SDA no GPIO 6, SCL no GPIO 7, INT no GPIO 5 e RST no GPIO 4.
+   PS0 e PS1 vão no GND (modo I2C; soltos, o sensor não responde) e AD0 também no GND (endereço
+   0x4A). O endereço 0x28 é do BNO055 e não responde neste módulo.
+3. RTC DS3231: VCC no 3V3, GND no GND, SDA no GPIO 6 e SCL no GPIO 7, em paralelo com o BNO085.
+4. Módulo microSD: VCC no **5V**, porque o regulador do módulo não funciona com 3V3 (o cartão recebe
+   uns 2,2 V e falha com erro `0x107`). GND no GND, SCK no GPIO 33, MOSI no GPIO 34, MISO no GPIO 47
+   e CS no GPIO 48. O MISO costuma vir escrito "MOSO"; trocá-lo com o MOSI é o erro mais comum.
+5. LED RGB (catodo comum): R, G e B nos GPIOs 39, 40 e 41, cada um com seu resistor; o catodo (perna
+   mais longa) no GND.
+6. Buzzer ativo: positivo no GPIO 42 e negativo no GND.
+7. Botão de calibração: é o BOOT da própria placa (GPIO 0), não precisa de fio.
+8. Prenda o BNO085 firme na carcaça do equipamento (parafuso, abraçadeira ou cola rígida). Sensor
+   solto ou jumper com mau contato derrubam as leituras. Se precisar remapear pinos na Heltec V3,
+   evite os GPIOs 8 a 14 (rádio LoRa) e 17, 18 e 21 (OLED).
+9. Formate o cartão em FAT32, encaixe no módulo e só então ligue o USB.
+
+---
+
+## 8. Como executar
+
+### 8.1 Compilar e gravar o firmware
+
+Com o ESP-IDF ativo, na raiz do repositório:
+
+```bash
+idf.py build
+idf.py -p COM4 flash monitor     # Linux: -p /dev/ttyUSB0 (sair do monitor: Ctrl+])
+```
+
+Se a porta sumir, troque o cabo ou a porta USB (hub e USB de monitor costumam dar problema). Feche o
+monitor antes de gravar de novo: com ele aberto, a porta fica ocupada.
+
+### 8.2 Subir a stack
+
+No Windows com WSL2, na raiz do repositório:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\stack\subir_stack_wsl.ps1 -Online
+```
+
+O script liga o Docker dentro do WSL, cria o `.env` se ele não existir e sobe os contêineres. Com
+`-Online` ele também sobe o serviço `tunel` (cloudflared), que publica o Grafana num endereço HTTPS
+sem precisar de conta nem de porta aberta no roteador. No fim aparecem os dois endereços:
+
+```
+Grafana: http://localhost:3001/d/pulsopnaat-monitor  (usuario/senha do .env, padrao admin/admin)
+Online:  https://<aleatorio>.trycloudflare.com/d/pulsopnaat-monitor?kiosk&refresh=5s
+```
+
+No Linux, no macOS ou com Docker Desktop:
+
+```bash
+docker compose --profile online up -d        # sem link público: docker compose up -d
+docker compose logs tunel | grep trycloudflare
+```
+
+O endereço `trycloudflare.com` muda sempre que o contêiner `tunel` reinicia.
+
+### 8.3 Operar
+
+1. Com o firmware e a stack no ar, calibre (§6.3) se a placa ainda não tiver baseline.
+2. Abra o dashboard "PulsoPNAAT — Monitoramento em tempo real", com período de 15 minutos. Para
+   apresentar, use o endereço com `?kiosk`.
+3. `status`, na serial ou no MQTT, mostra máquina de estados, baseline, condição reconhecida e
+   distância.
+4. Para gravar dados novos, informe a condição com `parado`, `vel1`, `vel2`, `vel3` ou `falha`. O
+   rótulo vai para o CSV e aparece no dashboard; volte a `sem_rotulo` ao terminar. Ele fica só na
+   memória, então precisa ser enviado de novo depois de um reinício da placa.
+
+### 8.4 Treinar o modelo de novo
+
+Use depois de coletar dados novos, ou quando o equipamento mudar de lugar ou de montagem (§10.4):
+
+```bash
+python tools/classificador/treinar_regime.py dataset/ventilador/serial_2026-09-16.csv \
+  dataset/ventilador/influx_2026-09-16_posicao2.csv \
+  --segmentos dataset/ventilador/segmentos.csv \
+  --eventos dataset/ventilador/eventos_limiares_2026-09-16.txt --margem-s 8
+idf.py -p COM4 flash
+```
+
+O script gera `components/regime_classifier/modelo_regime.h` e o relatório
+`tools/classificador/relatorio_regime.md`.
+
+### 8.5 Testes na placa
+
+```bash
+idf.py -C test_app set-target esp32s3     # só na primeira vez
+idf.py -C test_app -p COM4 flash monitor
+```
+
+O app de teste substitui o firmware na placa, então grave o firmware principal de novo depois (§8.1).
+
+### 8.6 Desligar a stack
+
+```powershell
+# Windows com WSL2 (os dados ficam nos volumes)
+wsl -d Ubuntu -u root --cd /mnt/c/<caminho/do/repo> -- docker compose --profile online down
+```
+
+```bash
+# Linux, macOS ou Docker Desktop
+docker compose --profile online down
+```
+
+---
+
+## 9. Resultado esperado
+
+### 9.1 Monitor serial no boot
+
+| Trecho da mensagem | O que confirma |
+|---|---|
+| `I2C pronta: SDA=6 SCL=7 freq=400000 Hz endereço BNO085=0x4A` | I2C configurado |
+| `janela #N: 400 amostras, … taxa efetiva=` perto de 400 Hz, sem `[FORA DA FAIXA ~400 Hz]` | Sensor a 400 Hz |
+| Uma linha com 18 números por segundo | Métricas sendo calculadas |
+| `microSD montado em /sdcard (SCK=33 MOSI=34 MISO=47 CS=48)` | Cartão funcionando |
+| `modelo de regime embarcado (5 regimes), decide LED e alertas` | Modelo treinado ativo |
+| `regime reconhecido: -1 → 0` (ou a velocidade atual) | Condição reconhecida |
+| `Got IP: …` e depois `MQTT conectado e inscrito nos tópicos. Sistema online.` | Rede e broker |
+| `RTC ajustado via SNTP: AAAA-MM-DDTHH:MM:SSZ` | Hora certa |
+| `baseline válido carregado da NVS` | Calibração carregada |
+
+`sem modelo de anomalia embarcado` é esperado: esse é o detector antigo de uma classe só, substituído
+pelo modelo de condição.
+
+### 9.2 LED e buzzer
+
+| Situação | LED | Buzzer |
+|---|---|---|
+| Sem baseline (`BOOT`) | apagado | desligado |
+| Calibrando | azul piscando rápido | desligado |
+| Parado ou em qualquer velocidade, vibração normal para ela | verde fixo | desligado |
+| Vibração fora do normal para a velocidade reconhecida | amarelo piscando | desligado |
+| Falha de alimentação reconhecida, ou vibração muito fora do normal | vermelho fixo | ligado |
+| Sem Wi-Fi (`CONTINGÊNCIA`) | branco piscando | só se o estado for crítico |
+
+Teste da bancada: troque entre as velocidades 0, 1, 2 e 3 esperando uns 30 s em cada, e o LED
+continua verde. Passe o ventilador para o filtro de linha com mau contato: em 1 a 3 s o LED fica
+vermelho e o buzzer toca. Volte para a tomada boa e ele retorna ao verde.
+
+### 9.3 Dashboard
+
+A telemetria só começa depois da calibração. Com o nó monitorando:
+
+| Painel | O que deve aparecer |
+|---|---|
+| Velocidade atual (reconhecida pelo modelo) | `PARADO`, `VELOCIDADE 1`, `2` ou `3`, ou `FALHA DE ALIMENTAÇÃO`, acompanhando o ventilador com alguns segundos de atraso |
+| Saúde do equipamento (LED e alertas) | `SAUDÁVEL` nas velocidades normais; `CRÍTICO` na falha |
+| Máquina de estados | `MONITORANDO` |
+| Limiares antigos (calibração única) | O que os limiares da calibração diriam. Costuma marcar `CRÍTICO` fora da velocidade calibrada e `SAUDÁVEL` na falha, o que mostra a diferença para o modelo |
+| Velocidade reconhecida (e rótulo, quando houver) | Faixa colorida com a condição ao longo do tempo; a linha do rótulo só aparece quando alguém informa um |
+| Saúde: modelo × limiares antigos | As duas opiniões lado a lado ao longo do tempo (RF11) |
+| RMS por eixo | Energia da vibração: ~0,02 m/s² parado, ~0,05 a 0,1 na falha e ~0,15 a 0,45 ligado |
+| Distância à assinatura da velocidade atual | Sobe quando a vibração foge do normal da condição |
+| Harmônica 1x e kurtosis por eixo | Curvas por eixo |
+| Alertas confirmados | Uma linha a cada vez que o estado muda para atenção ou crítico |
+
+Os dados chegam em lotes de até 10 s (intervalo do Telegraf), e o dashboard atualiza a cada 5 s. Pelo
+link público os painéis abrem sem login quando `GRAFANA_ANONYMOUS_ENABLED=true`.
+
+### 9.4 MQTT e cartão SD
+
+- No [HiveMQ WebSocket Client](https://www.hivemq.com/demos/websocket-client/), conectado a
+  `broker.mqttdashboard.com` e assinando `pulsopnaat/#`, chega uma mensagem por segundo em
+  `pulsopnaat/telemetria` e uma em `pulsopnaat/alert` a cada alerta.
+- No cartão, a pasta `pulso/` tem os arquivos `log_AAAAMMDD_HHMMSS.csv`, com cabeçalho
+  `timestamp,node_id,estado_maquina,estado_equipamento,rms_x,…,thd_z,rotulo,score_anomalia,anomalia,regime,distancia_regime,estado_limiares`
+  e uma linha por segundo em UTC (horário de Brasília = UTC−3).
+
+### 9.5 Testes
+
+O serial do app de teste termina com `102 Tests 0 Failures 0 Ignored` e `OK`.
+
+---
+
+## 10. Modelo treinado e dataset
+
+### 10.1 Por que um modelo
+
+Na prova de conceito, quem decidia era a calibração: 30 s com a máquina saudável, média e
+desvio-padrão (σ) de cada métrica, limite de atenção em média + 3σ e de crítico em média + 6σ, com
+votação entre as métricas. Na bancada, isso mostrou dois problemas. Calibrado numa velocidade,
+qualquer outra velocidade saudável parece anormal. E na falha de alimentação a vibração cai, o que um
+limite para cima não enxerga. A seção 5.4 do documento de requisitos já previa a evolução para um
+modelo treinado offline com inferência embarcada.
+
+### 10.2 Como funciona
+
+- Cada condição (parado, velocidade 1, 2, 3 e falha de alimentação) vira uma "assinatura": a média
+  das 18 métricas, em escala logarítmica, e o jeito como elas variam juntas (covariância com
+  encolhimento de Ledoit-Wolf).
+- A janela vai para a condição de menor distância de Mahalanobis (com o termo log|Σ|).
+- A saúde vem da distância até a condição reconhecida. O limite de atenção é o quantil 0,999 das
+  distâncias vistas no treino daquela condição, e o de crítico é 1,5 vez esse valor. Reconhecer a
+  falha já é crítico.
+- O treino roda no PC (`tools/classificador/treinar_regime.py`), e o ESP32 só faz a conta: cerca de
+  1,3 mil multiplicações por janela, com o modelo ocupando poucos kilobytes.
+
+### 10.3 Dataset e resultados
+
+O dataset está em [dataset/ventilador/](dataset/ventilador/README.md): 4.187 janelas, 3.688
+rotuladas, com o ventilador em duas posições. O teste usa passagens que ficaram fora do treino: o
+ventilador saiu da condição e voltou depois, e pelo menos uma passagem de falha em cada posição ficou
+só no teste.
+
+| | Modelo treinado | Limiares da calibração |
+|---|---|---|
+| Acurácia da saúde | 99,1% | 21,3% |
+| Falso alarme em operação normal | 0,7% | 92,0% |
+| Falhas detectadas | 98,2% | 73,1% |
+| Condição reconhecida (parado, vel1, vel2, vel3, falha) | 90,0% | — |
+
+Parado, velocidade 3 e as falhas acertaram 100%. As velocidades 1 e 2 ficaram em 81% e 78%, às vezes
+confundidas com a velocidade seguinte. O relatório completo está em
+[tools/classificador/relatorio_regime.md](tools/classificador/relatorio_regime.md).
+
+**Portão de decisão (seção 5.4 dos requisitos):** o script só marca o modelo para comandar LED,
+buzzer e alertas se ele atingir as metas (acurácia de pelo menos 85% e pelo menos 80% das falhas
+detectadas) e for melhor que os limiares. Se não atingir, o modelo fica em modo sombra e só aparece
+no dashboard.
+
+### 10.4 Quando treinar de novo
+
+O modelo vale para o equipamento e a montagem em que foi treinado. Na bancada, mudar o ventilador de
+lugar derrubou a vibração no eixo Z pela metade, e o modelo passou a confundir velocidades e a ver a
+falha como parado. A correção foi gravar uns 20 min na posição nova (duas passagens por condição),
+acrescentar os trechos em `dataset/ventilador/segmentos.csv` e treinar com as duas posições (§8.4).
+
+---
+
+## 11. Testes
+
+Os testes usam o Unity do ESP-IDF e rodam na própria placa, para validar o cálculo em ponto
+flutuante e o esp-dsp no Xtensa (§8.5). Resultado atual: 102 testes, 0 falhas.
+
 | Suíte | Arquivo | O que cobre |
 |---|---|---|
-| `signal_processing` | `components/signal_processing/test/test_signal_processing.c` | RMS, cadeia espectral (senoide em f0/2f0/4f0, THD), kurtosis, `metricas_para_vetor` |
-| `baseline` | `components/baseline/test/test_baseline.c` | Welford exato, coleta parcial/excedente, validação, serialização NVS (mágica/versão/CRC) |
-| `alert_manager` | `components/alert_manager/test/test_alert_manager.c` | Limiares 3σ/6σ, votação, pior eixo, máquina de estados, sinalização |
-| `mqtt_client` | `components/mqtt_client/test/test_mqtt_client.c` | Formatação dos payloads de alerta/status |
-| `anomaly_detector` | `components/anomaly_detector/test/test_anomaly_detector.c` | Ordem/transformação das features, Mahalanobis (identidade, escala, precisão cheia), limiar, defensivos, coerência do modelo embarcado |
- 
-Nova suíte: criar `components/<comp>/test/test_<comp>.c` (API `TEST_ASSERT_*`, função
-`rodar_testes_<comp>()`) e registrá-la no runner
-[`test_app/main/test_app_main.c`](test_app/main/test_app_main.c). Integração de hardware
-(I2C a 400 Hz, latência < 1 s, Wi-Fi/MQTT + reconexão, LED/buzzer, watchdog,
-estabilidade 2 h) é validada on-device por observação direta (serial, CSV, cronômetro).
- 
----
- 
-## 11. Critérios de sucesso (KPIs)
- 
-| Critério | Meta mensurável | Onde verificar |
-|---|---|---|
-| Acurácia de detecção | ≥ 85% em 20 janelas (10 saudáveis + 10 erro induzido) | Campanha de validação, matriz VP/VN/FP/FN |
-| Falsos positivos | ≤ 2 alertas em 1 h de operação normal | Log serial |
-| Latência de processamento | Cálculo da janela < 1 s | Medido on-device: ~11 ms (folga de ~99%) |
-| Resiliência de rede | Queda de Wi-Fi não trava a amostragem; retry automático até `WIFI_MAX_RETRY` em modo CONTINGÊNCIA | Teste de queda proposital (serial + LED branco) |
-| Estabilidade | ≥ 2 h contínuas sem travar, sem leak, sem intervenção | Monitoramento de turno |
- 
----
- 
-## 12. Solução de problemas
- 
-| Sintoma | Causa provável | Ação |
-|---|---|---|
-| Sensor não responde / NACK em `0x28` | Endereço errado: 0x28 é do BNO055 | Usar 0x4A (SA0=GND) ou 0x4B (SA0=VCC) |
-| Nada em 0x4A no scanner | PS0/PS1 flutuando, VCC/GND ou SDA/SCL trocados | PS0+PS1→GND; conferir §3.2; fios curtos |
-| Nó parado em `BOOT`, "sem baseline" | Comportamento esperado, não defeito | Executar `calibrar` com regime saudável (§9.1) |
-| Estado flipando a cada janela em repouso | Kurtosis sobre ruído de quantização (picos 20-400 de 1 janela) | Esperado e absorvido pela confirmação k=3; não zerar k sem motivo |
-| `status` mostra baseline ausente após reboot | NVS apagada / outro firmware gravado | Recalibrar; `baseline_carregar_nvs` loga o motivo |
-| Wi-Fi não conecta / hotspot não aparece | Hotspot subiu em 5 GHz | O ESP32-S3 só enxerga 2,4 GHz — force a banda no celular/roteador (§6) |
-| Wi-Fi conecta mas sem alerta remoto | Broker URI apontando para `localhost` default | Ajustar `MQTT Client → Broker URI` para o broker da bancada (§7.1) |
-| MQTT conecta e desconecta sozinho, mensagens somem | Broker público (`broker.mqttdashboard.com`, §7.1) sobrecarregado — compartilhado com milhares de clientes | Tentar reconectar; para algo decisivo, subir um Mosquitto local |
-| `app partition is too small` no build | Binário cresceu além de 1 MB (ex.: componente `storage`) | Trocar pra "Single factory app (large)" — passo a passo em §8.1 |
-| Build ok, flash falha | Cabo só-carga, porta ocupada pelo monitor, driver USB | Trocar cabo, fechar monitor, reinstalar driver, `idf.py -p /dev/ttyUSB0 flash` |
-| `idf.py` não encontrado | Ambiente do ESP-IDF não exportado nesta shell | `. $IDF_PATH/export.sh` e repetir |
-| microSD não monta (0x107/ESP_ERR_TIMEOUT) | MISO×MOSO trocado, cartão não FAT32, ou sem 3V3 estável | Reencaixar/testar outro cartão; conferir §3.5 |
-| LED trava numa cor após "I2C hardware timeout detected" | Barramento I2C engasgou | Mitigado: watchdog reinicializa o BNO085 sozinho — ver §12.1 |
- 
- ### 12.1 Problemas conhecidos
+| `signal_processing` | `components/signal_processing/test/test_signal_processing.c` | RMS, cadeia espectral (senoide em f0/2f0/4f0), THD, kurtosis, Hampel |
+| `baseline` | `components/baseline/test/test_baseline.c` | Welford, coleta parcial, validação, gravação NVS (mágica, versão, CRC) |
+| `alert_manager` | `components/alert_manager/test/test_alert_manager.c` | Limiares 3σ/6σ, votação, pior eixo, confirmação, máquina de estados |
+| `mqtt_client` | `components/mqtt_client/test/test_mqtt_client.c` e `test_mqtt_telemetria.c` | JSON de alerta, status e telemetria, truncamento e valores inválidos |
+| `anomaly_detector` | `components/anomaly_detector/test/test_anomaly_detector.c` | Features log, Mahalanobis, limiar e modelo embarcado |
+| `regime_classifier` | `components/regime_classifier/test/test_regime_classifier.c` | Condição mais próxima, desempate pelo determinante da covariância, atenção e crítico, falha conhecida, filtro 7 de 9, modelo embarcado |
 
-- **Travamento do I2C (BNO085) — mitigado, não eliminado.** Em campo, observado
-  `E (...) i2c.master: I2C hardware timeout detected` seguido de parada total das
-  janelas — sem reboot, então o watchdog do sistema não pegava. **Correção aplicada:**
-  `vibration_sensor` monitora o tempo desde a última janela concluída; se passar o
-  timeout configurado sem nenhuma, reinicializa o BNO085 (RST físico + novo handshake
-  SH-2) a partir da própria task de amostragem, com backoff entre tentativas. Causa
-  raiz ainda não isolada — o watchdog trata o sintoma. Risco conhecido e não validado
-  em operação longa: `bno085_init()` é de um componente gerenciado
-  (`rinku404/bno085`) cujo código não foi auditado — reinicializações repetidas podem,
-  em tese, vazar heap aos poucos; validar com `esp_get_free_heap_size()` antes de
-  confiar numa operação de produção longa.
+A integração com hardware (I2C a 400 Hz, Wi-Fi e MQTT, LED e buzzer, cartão) foi validada na bancada,
+pelo serial, pelo CSV e pelo dashboard.
 
 ---
- 
-## 13. Convenções de contribuição
- 
-- Branches: `main` (sempre estável; tags `entrega-01`, `entrega-02`…); `feature/<escopo>`,
-  `fix/<escopo>`, `poc/<escopo>`, `docs/<escopo>`. Nada direto na `main`, via merge/PR.
-- Commits (Conventional Commits simplificado): `<emoji> <tipo>: <descrição no imperativo>`
-  : `feat ✨` · `fix 🐛` · `docs 📚` · `test 🧪` · `refactor ♻️` · `perf ⚡` · `chore 🔧`.
-  Ex.: `git commit -m "✨ feat: adiciona cálculo de kurtosis por janela"`.
+
+## 12. Critérios de sucesso e resultados medidos
+
+| Critério (documento de requisitos, §6) | Meta | Resultado |
+|---|---|---|
+| Acurácia de detecção | ≥ 85% | 99,1% na saúde, em passagens fora do treino. A falha usada foi a de alimentação, não o peso de desbalanceamento previsto |
+| Taxa de falso positivo | ≤ 2 alertas falsos por hora | 0,7% das janelas saudáveis de teste. Alertas por hora numa hora contínua: não medido |
+| Latência de processamento | Janela processada em menos de 1 s | ~11 ms por janela |
+| Resiliência de rede | Reconectar e reenviar alertas em até 10 s | Reconexão automática (5 tentativas seguidas e depois a cada 30 s). Reenvio de alertas: pendente (§13). Tempo: não medido |
+| Estabilidade | ≥ 2 h sem travar | Não medido formalmente em 2 h contínuas |
+| Integridade do registro | ≥ 99% das janelas no log | Gravação com `fsync` a cada linha. Não medido formalmente |
+| Detecção de parada | Transição registrada em até 3 janelas | Parado reconhecido em 100% das janelas de teste. A condição exibida troca após 7 de 9 janelas |
+
 ---
- 
-## 14. Links e artefatos do projeto
- 
+
+## 13. Limitações e pendências
+
+Itens do documento de requisitos que ficaram parciais ou fora desta versão:
+
+- **RF05:** o alerta MQTT traz estado e RMS por eixo, mas não indica o eixo de maior desvio. A
+  telemetria por segundo traz as 18 métricas.
+- **RF07:** não há buffer de alertas. Alertas gerados sem conexão MQTT não são reenviados depois,
+  mas ficam registrados no cartão.
+- **RF10:** o dashboard não tem botões de ação. A calibração remota é feita publicando `calibrar` em
+  `pulsopnaat/command`.
+- **RF13:** a parada é reconhecida pelo modelo (condição `parado`, gravada por janela no CSV), não por
+  um piso de RMS.
+- **RF14:** não há captura do sinal bruto por gatilho.
+- **RNF06:** o watchdog de interrupção reinicia a placa se o processador travar. O watchdog de
+  tarefas só avisa; para reiniciar também, ative `CONFIG_ESP_TASK_WDT_PANIC`.
+- **RNF08:** a proteção IP54 do invólucro não foi avaliada.
+- O modelo vale para o ventilador e as montagens do dataset; outro equipamento precisa de dataset
+  próprio. A falha treinada é só a de alimentação.
+- O RPM nominal (1500) é o padrão do projeto; a rotação real do ventilador não foi medida.
+- O broker público pode oscilar; para uso contínuo, prefira o Mosquitto local.
+
+---
+
+## 14. Solução de problemas
+
+| Sintoma | Causa provável | O que fazer |
+|---|---|---|
+| Sensor não responde / NACK em `0x28` | Endereço errado: 0x28 é do BNO055 | Use 0x4A (AD0 no GND) |
+| Nada em 0x4A | PS0/PS1 soltos, VCC/GND ou SDA/SCL trocados | PS0 e PS1 no GND; confira §7 |
+| Placa reinicia em loop logo no boot | SSID vazio no `menuconfig` | Preencha o Wi-Fi (§6.1) |
+| LED branco piscando o tempo todo | Wi-Fi em 5 GHz, nome ou senha errados | Use rede de 2,4 GHz com o mesmo nome e senha gravados no firmware |
+| Conecta ao Wi-Fi, mas nada chega ao dashboard | Broker errado no firmware ou no `.env`, ou stack desligada | Confira `MQTT Broker URI` e `MQTT_BROKER`; suba a stack (§8.2) |
+| Nó parado em `BOOT` | Sem baseline | Calibre (§6.3) |
+| microSD não monta (`0x107`) | MISO e MOSO trocados, cartão exFAT ou módulo em 3V3 | Confira §7.2, formate em FAT32, alimente em 5V |
+| `app partition is too small` | `sdkconfig` antigo com partição de 1 MB | No `menuconfig`, escolha "Partition Table → Single factory app (large)", ou apague o `sdkconfig` e configure o Wi-Fi de novo |
+| Gravação falha com "No serial data received" ou "Failed to read target memory" | Mau contato no cabo ou porta USB | Desconecte o USB por alguns segundos e ligue direto no PC |
+| "Acesso negado" na COM4 | Monitor serial aberto | Feche o monitor com Ctrl+] |
+| Condição errada depois de mexer no equipamento | A montagem mudou a vibração | Colete a posição nova e treine de novo (§10.4) |
+| Dashboard antigo na tela | A aba não recarregou | Ctrl + Shift + R |
+| Tabela de alertas vazia | O alerta só aparece na troca de estado e saiu do período escolhido | Use "Last 15 minutes" ou mais |
+| WSL com "Input/output error" em `/mnt/c` | Rede do Windows mudou | `wsl --shutdown` e rode `subir_stack_wsl.ps1` de novo |
+| MQTT conecta e cai | Broker público sobrecarregado | Aguarde a reconexão ou use o Mosquitto local |
+
+---
+
+## 15. Convenções de contribuição
+
+- Branches: `main` sempre estável; trabalho em `feature/<escopo>`, `feat/<escopo>`, `fix/<escopo>` ou
+  `docs/<escopo>`, integrado por pull request.
+- Commits no formato `<tipo>: <descrição no imperativo>`, com os tipos `feat`, `fix`, `docs`, `test`,
+  `refactor`, `perf` e `chore`.
+
+---
+
+## 16. Links do projeto
+
 | Artefato | Link |
 |---|---|
-| Documento de Requisitos (Google Docs, editável) | <https://docs.google.com/document/d/1QIgbHTcKwcer_rzORCKN2OAKju7ix4JR/edit?usp=sharing> |
+| Repositório | <https://github.com/jhonatan-goncalves-pereira/pulsopnaat> |
+| Documento de Requisitos (Google Docs) | <https://docs.google.com/document/d/1QIgbHTcKwcer_rzORCKN2OAKju7ix4JR/edit?usp=sharing> |
 | Planilha de controle (`tcc-pulso-tracker.xlsx`) | <https://docs.google.com/spreadsheets/d/1MkHiGMCMCF25L5tZ5RpFTZwveaDipnlx/edit?usp=sharing> |
-| Repositório do projeto (este repo, GitHub) | <https://github.com/jhonatan-goncalves-pereira/pulsopnaat> |
 | Pasta de entregáveis (Google Drive) | <https://drive.google.com/drive/folders/1q1L6O3FajovOKOLExfUZOBMS1porxC6X?usp=sharing> |
-| Dashboard MQTT (HiveMQ Websocket Client) | <https://www.hivemq.com/demos/websocket-client/> |
- 
-
+| Cliente MQTT no navegador (HiveMQ) | <https://www.hivemq.com/demos/websocket-client/> |
